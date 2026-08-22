@@ -1,51 +1,75 @@
 import os
 
 from dotenv import load_dotenv
+
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
+
 from pydantic import BaseModel
-from google import genai
+
+from rag.rag_pipeline import ask_sies_gpt
 
 
 load_dotenv()
 
-app = FastAPI(title="SIES GPT API")
+
+app = FastAPI(
+    title="SIES GPT API"
+)
 
 
-# Allow React frontend to communicate with FastAPI
+# -----------------------------------------
+# CORS
+# -----------------------------------------
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+
+    allow_origins=[
+        "http://localhost:5173"
+    ],
+
     allow_credentials=True,
+
     allow_methods=["*"],
-    allow_headers=["*"],
+
+    allow_headers=["*"]
 )
 
 
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
-
+# -----------------------------------------
+# Request model
+# -----------------------------------------
 
 class ChatRequest(BaseModel):
+
     message: str
 
 
+# -----------------------------------------
+# Root
+# -----------------------------------------
+
 @app.get("/")
 def root():
+
     return {
         "message": "SIES GPT backend is running"
     }
 
 
-@app.post("/chat")
-def chat(request: ChatRequest):
+# -----------------------------------------
+# RAG Chat
+# -----------------------------------------
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=request.message
+@app.post("/chat")
+def chat(
+    request: ChatRequest
+):
+
+    result = ask_sies_gpt(
+        request.message
     )
 
-    return {
-        "answer": response.text
-    }
+    return result
