@@ -22,7 +22,7 @@ def ask_sies_gpt(question: str):
 
 
     # -----------------------------
-    # 2. Generate answer with Gemini
+    # 2. Generate answer with ollama
     # -----------------------------
 
     answer = generate_answer(

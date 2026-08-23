@@ -1,30 +1,29 @@
-import os
-
-from dotenv import load_dotenv
-
-from google import genai
-
-from google.genai import types
+import ollama
 
 
-load_dotenv()
-
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
-
-
-EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_MODEL = "nomic-embed-text:latest"
 
 
 def create_embedding(text: str):
+    """
+    Create an embedding using Ollama.
+    """
 
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=types.EmbedContentConfig(
-            task_type="RETRIEVAL_DOCUMENT"
+    if not text or not text.strip():
+        raise ValueError(
+            "Cannot create embedding for empty text."
         )
+
+    response = ollama.embed(
+        model=EMBEDDING_MODEL,
+        input=text
     )
 
-    return response.embeddings[0].values
+    embeddings = response.get("embeddings")
+
+    if not embeddings:
+        raise RuntimeError(
+            "Ollama returned no embeddings."
+        )
+
+    return embeddings[0]
