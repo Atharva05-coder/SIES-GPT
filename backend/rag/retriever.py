@@ -1,43 +1,572 @@
+import json
+import math
+import re
+from collections import Counter
+from functools import lru_cache
+from pathlib import Path
+
 from rag.embeddings import create_embedding
+from rag.outline_formatter import (
+    extract_module_outlines,
+    select_requested_modules,
+)
 from rag.vector_store import collection
 
+SYLLABUS_JSON = (
+    Path(__file__).resolve().parents[1] / "data" / "te_ce_r24_structured.json"
+)
+COURSE_CODE = re.compile(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b")
+TOKEN = re.compile(r"[a-z0-9]+")
+OUTLINE_REQUEST = re.compile(
+    r"\b(syllabus|curriculum|modules?|topics?|self.?learning|course content|course outline|labs?|practicals?|experiments?)\b",
+    re.IGNORECASE,
+)
+LAB_REQUEST = re.compile(r"\b(labs?|practicals?|experiments?)\b", re.IGNORECASE)
+SEMESTER_TOKEN = r"(?:VIII|VII|VI|V|IV|III|II|I|[1-8])"
+SEMESTER_MARKER = re.compile(
+    rf"\b(?:semester|sem)\s*[-:#]?\s*({SEMESTER_TOKEN})\b",
+    re.IGNORECASE,
+)
+SEMESTER_RANGE = re.compile(
+    rf"\b(?:semesters?|sems?)\s*({SEMESTER_TOKEN})\s*(?:-|to|through)\s*({SEMESTER_TOKEN})\b",
+    re.IGNORECASE,
+)
+STOP_WORDS = {
+    "a",
+    "about",
+    "an",
+    "and",
+    "are",
+    "as",
+    "based",
+    "complete",
+    "could",
+    "course",
+    "courses",
+    "from",
+    "give",
+    "in",
+    "is",
+    "me",
+    "of",
+    "on",
+    "please",
+    "show",
+    "tell",
+    "the",
+    "their",
+    "to",
+    "what",
+    "which",
+    "with",
+    "wise",
+    "syllabus",
+    "module",
+    "modules",
+    "topic",
+    "topics",
+    "self",
+    "learning",
+    "content",
+    "outline",
+    "syllabus",
+    "module",
+    "modules",
+    "topic",
+    "topics",
+    "self",
+    "learning",
+    "lab",
+    "labs",
+    "practical",
+    "practicals",
+    "experiment",
+    "experiments",
+    "complete",
+    "wise",
+    "list",
+    "first",
+    "initial",
+    "top",
+    "last",
+    "final",
+    "between",
+}
+SEMESTER_ROMANS = {
+    "I": 1,
+    "II": 2,
+    "III": 3,
+    "IV": 4,
+    "V": 5,
+    "VI": 6,
+    "VII": 7,
+    "VIII": 8,
+}
 
-def retrieve_relevant_chunks(
-    question: str,
-    top_k: int = 10
-):
 
-    query_embedding = create_embedding(
-        question
-    )
+def _normalize_token(token: str) -> str:
+    if len(token) > 5 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 7 and token.endswith("ing"):
+        stem = token[:-3]
+        if len(stem) > 2 and stem[-1] == stem[-2]:
+            stem = stem[:-1]
+        return stem
+    if len(token) > 4 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
-    results = collection.query(
-        query_embeddings=[
-            query_embedding
-        ],
-        n_results=top_k
-    )
 
-    retrieved = []
+def _tokenize(text: str) -> list[str]:
+    tokens = TOKEN.findall(text.casefold())
+    compounds = re.findall(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", text.casefold())
+    tokens.extend(compound.replace("-", "") for compound in compounds)
+    return [
+        _normalize_token(token)
+        for token in tokens
+        if _normalize_token(token) not in STOP_WORDS
+    ]
 
-    documents = results.get(
-        "documents",
-        [[]]
-    )[0]
 
-    metadatas = results.get(
-        "metadatas",
-        [[]]
-    )[0]
+def _semester_number(token: str) -> int:
+    normalized = token.upper()
+    if normalized in SEMESTER_ROMANS:
+        return SEMESTER_ROMANS[normalized]
+    return int(normalized)
 
-    for document, metadata in zip(
-        documents,
-        metadatas
+
+def _requested_semesters(question: str) -> list[int]:
+    range_match = SEMESTER_RANGE.search(question)
+    if range_match:
+        first = _semester_number(range_match.group(1))
+        last = _semester_number(range_match.group(2))
+        low, high = sorted((first, last))
+        return list(range(low, high + 1))
+
+    return [
+        _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(question)
+    ]
+
+
+@lru_cache(maxsize=1)
+def _semester_structure_pages() -> tuple[dict, ...]:
+    try:
+        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
+            syllabus = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return ()
+
+    pages = []
+    for page in syllabus.get("pages", []):
+        text = page.get("text", "")
+        page_num = page.get("page_number")
+        
+        semesters = [
+            _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(text)
+        ]
+        
+        if "Program Structure for" in text or page_num in [12, 14, 16]:
+            if page_num == 12: semesters.append(5)
+            elif page_num == 14: semesters.append(6)
+            elif page_num == 16: semesters.append(7)
+            
+            if semesters:
+                pages.append({**page, "semesters": sorted(set(semesters))})
+                
+    return tuple(pages)
+
+
+def _retrieve_semester_structures(question: str) -> list[dict] | None:
+    if not re.search(
+        r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?)\b",
+        question,
+        re.IGNORECASE,
     ):
+        return None
 
-        retrieved.append({
-            "text": document,
-            "metadata": metadata
-        })
+    requested = _requested_semesters(question)
+    if not requested:
+        return None
 
-    return retrieved
+    try:
+        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
+            document = json.load(file)["document"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None
+
+    matched_pages = [
+        page
+        for page in _semester_structure_pages()
+        if set(page["semesters"]) & set(requested)
+    ]
+    if not matched_pages:
+        return None
+
+    return [
+        {
+            "text": page["text"],
+            "metadata": {
+                "filename": document.get("filename", "Unknown PDF"),
+                "page": page["page_number"],
+                "url": document.get("source_url", ""),
+                "semesters": sorted(set(page["semesters"]) & set(requested)),
+                "semester_outline": True,
+            },
+        }
+        for page in matched_pages
+    ]
+
+
+@lru_cache(maxsize=1)
+def _course_sections() -> tuple[dict, ...]:
+    try:
+        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
+            syllabus = json.load(file)
+            pages = syllabus["pages"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return ()
+    document = syllabus.get("document", {})
+
+    starts = []
+    for index, page in enumerate(pages):
+        text = page.get("text", "")
+        code = COURSE_CODE.search(text)
+        has_course_objectives = "Course Objectives" in text
+        has_lab_objectives = "Lab Objectives" in text
+        if code and (has_course_objectives or has_lab_objectives):
+            starts.append((index, code.group()))
+
+    sections = []
+    for section_index, (start, code) in enumerate(starts):
+        end = (
+            starts[section_index + 1][0]
+            if section_index + 1 < len(starts)
+            else len(pages)
+        )
+        section_pages = pages[start:end]
+        header_text = section_pages[0].get("text", "")
+        code_match = COURSE_CODE.search(header_text)
+        header = (
+            header_text[code_match.end() : code_match.end() + 120] if code_match else ""
+        )
+        module_pages = [
+            page
+            for page in section_pages
+            if re.search(r"(?m)^\s*[1-6]\.0\b", page.get("text", ""))
+            and re.search(r"(?i)self.?learning", page.get("text", ""))
+        ]
+        module_outlines = extract_module_outlines(section_pages)
+        lab_pages = []
+        in_lab_content = False
+        for page in section_pages:
+            text = page.get("text", "")
+            stop = re.search(
+                r"(?im)^\s*(Course Assessment:|End Semester Examination:)",
+                text,
+            )
+            if stop:
+                text = text[: stop.start()]
+            if text.strip():
+                lab_pages.append({**page, "text": text.strip()})
+            if stop:
+                break
+            if "Lab Objectives" in text or "Suggested List of Experiments" in text:
+                in_lab_content = True
+            elif (
+                in_lab_content
+                and "Lab Outcomes" not in text
+                and not re.search(
+                    r"(?i)\b(?:LO\d|Sr\.?\s*No\.?|Title of Experiments)\b", text
+                )
+                and not re.search(r"(?im)^\s*(Textbooks:|Reference books:|Online References:)", text)
+            ):
+                break
+
+        has_lab_content = any(
+            "Lab Objectives" in page.get("text", "")
+            or "Suggested List of Experiments" in page.get("text", "")
+            for page in section_pages
+        )
+        content_pages = section_pages
+        sections.append(
+            {
+                "code": code,
+                "header": header,
+                "text": "\n".join(page.get("text", "") for page in section_pages),
+                "pages": content_pages,
+                "overview_page": section_pages[0],
+                "module_pages": module_pages,
+                "module_outlines": module_outlines,
+                "lab_pages": lab_pages if has_lab_content else [],
+                "filename": document.get("filename", "Unknown PDF"),
+                "url": document.get("source_url", ""),
+            }
+        )
+    return tuple(sections)
+
+
+def _bm25_scores(query: str, documents: list[str]) -> list[float]:
+    query_terms = set(_tokenize(query))
+    if not query_terms or not documents:
+        return [0.0] * len(documents)
+
+    tokenized_documents = [_tokenize(document) for document in documents]
+    frequencies = [Counter(tokens) for tokens in tokenized_documents]
+    document_frequency = {
+        term: sum(term in counts for counts in frequencies) for term in query_terms
+    }
+    average_length = max(
+        sum(map(len, tokenized_documents)) / len(tokenized_documents),
+        1.0,
+    )
+
+    scores = []
+    for tokens, counts in zip(tokenized_documents, frequencies):
+        score = 0.0
+        for term in query_terms:
+            term_frequency = counts[term]
+            if not term_frequency:
+                continue
+            inverse_frequency = math.log(
+                1
+                + (len(documents) - document_frequency[term] + 0.5)
+                / (document_frequency[term] + 0.5)
+            )
+            length_factor = 1.2 * (0.25 + 0.75 * len(tokens) / average_length)
+            score += (
+                inverse_frequency
+                * term_frequency
+                * 2.2
+                / (term_frequency + length_factor)
+            )
+        scores.append(score)
+    return scores
+
+
+def _retrieve_course_section(question: str) -> list[dict] | None:
+    sections = _course_sections()
+    if not sections:
+        return None
+
+    scores = _bm25_scores(question, [section["text"] for section in sections])
+    query_tokens = set(_tokenize(question))
+    code_match = COURSE_CODE.search(question.upper())
+    is_outline_request = bool(OUTLINE_REQUEST.search(question))
+    is_lab_request = bool(LAB_REQUEST.search(question))
+    generic_title_terms = {
+        "engineer",
+        "engineering",
+        "lab",
+        "labs",
+        "practical",
+        "practicals",
+        "experiment",
+        "experiments",
+    }
+    ranked_sections = []
+    for section, score in zip(sections, scores):
+        if code_match and section["code"] != code_match.group():
+            continue
+        if is_outline_request and not is_lab_request and section["lab_pages"]:
+            continue
+
+        title_tokens = set(_tokenize(section["header"]))
+        title_overlap = query_tokens & title_tokens
+        subject_overlap = {
+            token for token in title_overlap if not token.isdigit()
+        } - generic_title_terms
+        query_subject_tokens = {
+            token for token in query_tokens if not token.isdigit()
+        } - generic_title_terms
+        if "computer" in query_tokens and ("engineer" in query_tokens or "engineering" in query_tokens):
+            subject_overlap.discard("computer")
+            query_subject_tokens.discard("computer")
+        content_overlap = query_tokens & set(_tokenize(section["text"]))
+        content_overlap = {token for token in content_overlap if not token.isdigit()}
+
+        if is_lab_request and not re.search(
+            r"\blab\b", section["header"], re.IGNORECASE
+        ):
+            continue
+        if is_outline_request and not subject_overlap and not code_match:
+            continue
+        if (
+            is_outline_request
+            and not code_match
+            and query_subject_tokens
+            and len(subject_overlap & query_subject_tokens) / len(query_subject_tokens) < 0.4
+        ):
+            continue
+        if is_lab_request and not subject_overlap and not code_match:
+            continue
+        if not code_match and len(subject_overlap) < 2:
+            continue
+
+        score += len(subject_overlap) * 2.0
+        if code_match:
+            score += 100.0
+            
+        if not is_lab_request and not re.search(r"\blab\b", section["header"], re.IGNORECASE):
+            score += 5.0
+            
+        ranked_sections.append((score, section, bool(subject_overlap)))
+
+    if not ranked_sections:
+        return None
+
+    best_score, best_section, title_match = max(
+        ranked_sections,
+        key=lambda item: item[0],
+    )
+    if best_score <= 0:
+        return None
+    if not code_match and not title_match and best_score < 1.5:
+        return None
+
+    if is_outline_request and is_lab_request and best_section["lab_pages"]:
+        selected_pages = best_section["lab_pages"]
+    elif is_outline_request and best_section["module_outlines"]:
+        selected_modules = select_requested_modules(
+            question,
+            best_section["module_outlines"],
+        )
+        return [
+            {
+                "text": module["text"],
+                "metadata": {
+                    "filename": best_section["filename"],
+                    "page": module["pages"][0],
+                    "pages": module["pages"],
+                    "url": best_section["url"],
+                    "course_code": best_section["code"],
+                    "course_outline": True,
+                },
+            }
+            for module in selected_modules
+        ]
+    elif is_outline_request and best_section["module_pages"]:
+        selected_pages = best_section["module_pages"]
+    else:
+        selected_pages = best_section["pages"]
+
+    return [
+        {
+            "text": page["text"],
+            "metadata": {
+                "filename": best_section["filename"],
+                "page": page["page_number"],
+                "url": best_section["url"],
+                "course_code": best_section["code"],
+                "course_outline": is_outline_request,
+            },
+        }
+        for page in selected_pages
+        if page.get("text")
+    ]
+
+
+def retrieve_relevant_chunks(question: str, top_k: int = 10):
+    forced_results = []
+    
+    is_semester_catalog = (
+        SEMESTER_MARKER.search(question) is not None
+        and COURSE_CODE.search(question.upper()) is None
+        and re.search(r"\bmodules?\b", question, re.IGNORECASE) is None
+        and not LAB_REQUEST.search(question)
+    )
+    is_broad_semester_range = (
+        SEMESTER_RANGE.search(question) is not None
+        and COURSE_CODE.search(question.upper()) is None
+        and re.search(r"\bmodules?\b", question, re.IGNORECASE) is None
+        and not LAB_REQUEST.search(question)
+    )
+    
+    if is_semester_catalog or is_broad_semester_range:
+        semester_results = _retrieve_semester_structures(question)
+        if semester_results:
+            return semester_results
+
+    section_results = _retrieve_course_section(question)
+    if section_results:
+        return section_results
+        
+    semester_results = _retrieve_semester_structures(question)
+    if semester_results:
+        return semester_results
+
+
+    collection_size = collection.count()
+    if not collection_size:
+        return []
+
+    candidate_count = min(collection_size, max(top_k * 5, 40))
+    query_embedding = create_embedding(question)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=candidate_count,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    documents = results.get("documents", [[]])[0] or []
+    metadatas = results.get("metadatas", [[]])[0] or []
+    distances = results.get("distances", [[]])[0] or []
+    lexical_scores = _bm25_scores(question, documents)
+    if not any(score > 0 for score in lexical_scores) and (
+        not distances or min(distances) > 0.85
+    ):
+        return []
+
+    dense_order = sorted(
+        range(len(documents)),
+        key=lambda index: distances[index] if index < len(distances) else float("inf"),
+    )
+    lexical_order = sorted(
+        (index for index, score in enumerate(lexical_scores) if score > 0),
+        key=lambda index: lexical_scores[index],
+        reverse=True,
+    )
+    dense_ranks = {index: rank for rank, index in enumerate(dense_order, start=1)}
+    lexical_ranks = {index: rank for rank, index in enumerate(lexical_order, start=1)}
+
+    ranked_indices = sorted(
+        (
+            index
+            for index in range(len(documents))
+            if lexical_scores[index] > 0
+            or (index < len(distances) and distances[index] <= 0.85)
+        ),
+        key=lambda index: (
+            1 / (60 + dense_ranks[index])
+            + (1 / (60 + lexical_ranks[index]) if index in lexical_ranks else 0),
+            lexical_scores[index],
+        ),
+        reverse=True,
+    )
+    file_scores = Counter()
+    for rank, index in enumerate(ranked_indices[: max(top_k, 3)], start=1):
+        metadata = metadatas[index] or {}
+        filename = metadata.get("filename")
+        if filename:
+            file_scores[filename] += 1 / (60 + rank)
+    if file_scores:
+        best_filename = file_scores.most_common(1)[0][0]
+        ranked_indices = [
+            index
+            for index in ranked_indices
+            if (metadatas[index] or {}).get("filename") == best_filename
+        ]
+
+    dense_results = [
+        {"text": documents[index], "metadata": metadatas[index]}
+        for index in ranked_indices[:top_k]
+    ]
+    
+    final_results = list(forced_results)
+    seen = { (r["metadata"].get("page"), r["metadata"].get("filename")) for r in final_results }
+    for r in dense_results:
+        key = (r["metadata"].get("page"), r["metadata"].get("filename"))
+        if key not in seen:
+            seen.add(key)
+            final_results.append(r)
+    
+    return final_results[:top_k]

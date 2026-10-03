@@ -14,7 +14,7 @@ __pycache__/
 
 # IDEs
 .vscode/
-.idea/
+.idea
 
 # Testing / coverage
 .pytest_cache/
@@ -29,3 +29,15 @@ dist/
 # OS files
 .DS_Store
 Thumbs.db
+# Database
+backend/chroma_db/
+
+# Data
+backend/data/
+
+# Test scripts and results
+backend/test*.py
+backend/run_tests*.py
+backend/test_results*.md
+
+backend/test/

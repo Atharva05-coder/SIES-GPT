@@ -1,6 +1,5 @@
 import io
 import requests
-
 from pypdf import PdfReader
 
 
@@ -9,9 +8,7 @@ def download_pdf(url: str) -> bytes:
         url,
         timeout=60
     )
-
     response.raise_for_status()
-
     return response.content
 
 
@@ -28,10 +25,12 @@ def extract_pdf_pages(pdf_bytes: bytes):
     ):
         text = page.extract_text() or ""
 
-        if text.strip():
+        text = text.strip()
+
+        if text:
             pages.append({
                 "page": page_number,
-                "text": text.strip()
+                "text": text
             })
 
     return pages

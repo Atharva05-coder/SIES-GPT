@@ -10,13 +10,10 @@ from pydantic import BaseModel
 
 from rag.rag_pipeline import ask_sies_gpt
 
-
 load_dotenv()
 
 
-app = FastAPI(
-    title="SIES GPT API"
-)
+app = FastAPI(title="SIES GPT API")
 
 
 # -----------------------------------------
@@ -25,22 +22,20 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=[
-        "http://localhost:5173"
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
     ],
-
     allow_credentials=True,
-
     allow_methods=["*"],
-
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 
 # -----------------------------------------
 # Request model
 # -----------------------------------------
+
 
 class ChatRequest(BaseModel):
 
@@ -51,25 +46,21 @@ class ChatRequest(BaseModel):
 # Root
 # -----------------------------------------
 
+
 @app.get("/")
 def root():
 
-    return {
-        "message": "SIES GPT backend is running"
-    }
+    return {"message": "SIES GPT backend is running"}
 
 
 # -----------------------------------------
 # RAG Chat
 # -----------------------------------------
 
-@app.post("/chat")
-def chat(
-    request: ChatRequest
-):
 
-    result = ask_sies_gpt(
-        request.message
-    )
+@app.post("/chat")
+def chat(request: ChatRequest):
+
+    result = ask_sies_gpt(request.message)
 
     return result
