@@ -18,7 +18,7 @@ SYLLABUS_JSON = (
 COURSE_CODE = re.compile(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b")
 TOKEN = re.compile(r"[a-z0-9]+")
 OUTLINE_REQUEST = re.compile(
-    r"\b(syllabus|curriculum|modules?|topics?|self.?learning|course content|course outline|labs?|practicals?|experiments?)\b",
+    r"\b(syllabus|curriculum|modules?|topics?|units?|chapters?|sections?|self.?learning|course content|course outline|labs?|practicals?|experiments?|tasks?|assignments?|outcomes?|objectives?|goals?|aims?|purpose|books?|textbooks?|references?|bibliography|reading|materials?|prerequisites?|pre-requisites?|requirements?|background|marks?|grading|assessments?|evaluations?|examinations?|exam scheme|scheme)\b",
     re.IGNORECASE,
 )
 LAB_REQUEST = re.compile(r"\b(labs?|practicals?|experiments?)\b", re.IGNORECASE)
@@ -178,7 +178,7 @@ def _semester_structure_pages() -> tuple[dict, ...]:
 
 def _retrieve_semester_structures(question: str) -> list[dict] | None:
     if not re.search(
-        r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?)\b",
+        r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?|options?|mdms?|minors?|examination scheme|exam scheme|credits?|structure|list)\b",
         question,
         re.IGNORECASE,
     ):
@@ -270,7 +270,7 @@ def _course_sections() -> tuple[dict, ...]:
                 lab_pages.append({**page, "text": text.strip()})
             if stop:
                 break
-            if "Lab Objectives" in text or "Suggested List of Experiments" in text:
+            if "Lab Objective" in text or "Suggested List of Experiments" in text:
                 in_lab_content = True
             elif (
                 in_lab_content
@@ -390,16 +390,10 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
             continue
         if is_outline_request and not subject_overlap and not code_match:
             continue
-        if (
-            is_outline_request
-            and not code_match
-            and query_subject_tokens
-            and len(subject_overlap & query_subject_tokens) / len(query_subject_tokens) < 0.4
-        ):
-            continue
+        # Ratio check removed
         if is_lab_request and not subject_overlap and not code_match:
             continue
-        if not code_match and len(subject_overlap) < 2:
+        if not code_match and not subject_overlap:
             continue
 
         score += len(subject_overlap) * 2.0
@@ -423,9 +417,11 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
     if not code_match and not title_match and best_score < 1.5:
         return None
 
+    is_strict_module_request = bool(re.search(r"\b(syllabus|curriculum|modules?|topics?|self.?learning|course content|course outline)\b", question, re.IGNORECASE))
+    
     if is_outline_request and is_lab_request and best_section["lab_pages"]:
         selected_pages = best_section["lab_pages"]
-    elif is_outline_request and best_section["module_outlines"]:
+    elif is_outline_request and is_strict_module_request and best_section["module_outlines"]:
         selected_modules = select_requested_modules(
             question,
             best_section["module_outlines"],
@@ -444,7 +440,7 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
             }
             for module in selected_modules
         ]
-    elif is_outline_request and best_section["module_pages"]:
+    elif is_outline_request and is_strict_module_request and best_section["module_pages"]:
         selected_pages = best_section["module_pages"]
     else:
         selected_pages = best_section["pages"]
@@ -570,3 +566,8 @@ def retrieve_relevant_chunks(question: str, top_k: int = 10):
             final_results.append(r)
     
     return final_results[:top_k]
+
+
+
+
+

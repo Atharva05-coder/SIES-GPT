@@ -41,3 +41,6 @@ backend/run_tests*.py
 backend/test_results*.md
 
 backend/test/
+
+# Vector Database
+chroma_db/

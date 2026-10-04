@@ -153,194 +153,19 @@ def split_long_text(
 # ============================================================
 
 def detect_course(text: str):
-    """
-    Detect the actual course heading on a page.
-
-    IMPORTANT:
-
-    We must NOT detect a course merely because its code occurs
-    somewhere in the page.
-
-    Example:
-
-        Pre-requisite:
-        1. CEC503: Computer Network
-
-    must NOT make the page a CEC503 page.
-
-    We therefore:
-
-    1. Find the actual "Course Code / Course Name" header.
-    2. Search only the course-header area.
-    3. Stop searching when Teaching Scheme / Examination Scheme
-       begins.
-    """
-
-    lines = [
-        clean_line(line)
-        for line in text.splitlines()
-        if clean_line(line)
-    ]
-
-    if not lines:
-        return None
-
-    # ========================================================
-    # FIND COURSE CODE / COURSE NAME HEADER
-    # ========================================================
-
-    header_index = None
-
-    for i, line in enumerate(lines):
-
-        lower = line.lower()
-
-        if (
-            "course code" in lower
-            and "course name" in lower
-        ):
-            header_index = i
-            break
-
-    # No course table on this page.
-    #
-    # IMPORTANT:
-    # Do NOT return a course merely because a course code
-    # appears somewhere else.
-    if header_index is None:
-        return None
-
-    # ========================================================
-    # GET ONLY COURSE HEADER AREA
-    # ========================================================
-
-    header_lines = []
-
-    for line in lines[header_index + 1:]:
-
-        lower = line.lower()
-
-        # Once these appear, the course-header section has ended.
-        if (
-            "teaching scheme" in lower
-            or "examination scheme" in lower
-        ):
-            break
-
-        header_lines.append(line)
-
-    if not header_lines:
-        return None
-
-    # ========================================================
-    # CHECK KNOWN COURSES
-    # ========================================================
-
-    for code, course_name in COURSES.items():
-
-        for i, line in enumerate(header_lines):
-
-            # ------------------------------------------------
-            # Same-line format
-            #
-            # CEC503 Computer Network
-            # ------------------------------------------------
-
-            if re.search(
-                rf"^\s*{re.escape(code)}\s+"
-                rf"{re.escape(course_name)}\b",
-                line,
-                re.IGNORECASE
-            ):
-
-                return {
-                    "course_code": code,
-                    "course_name": course_name
-                }
-
-            # ------------------------------------------------
-            # Code may be separated from course name
-            #
-            # CEC503
-            # Computer
-            # Network
-            # ------------------------------------------------
-
-            if re.fullmatch(
-                re.escape(code),
-                line,
-                re.IGNORECASE
-            ):
-
-                combined = " ".join(
-                    header_lines[i + 1:i + 5]
-                )
-
-                if (
-                    course_name.lower()
-                    in combined.lower()
-                ):
-
-                    return {
-                        "course_code": code,
-                        "course_name": course_name
-                    }
-
-    # ========================================================
-    # GENERIC COURSE CODE
-    #
-    # Example:
-    #
-    # MDMC5022
-    # Data Analytics and Visualization
-    # ========================================================
-
-    for i, line in enumerate(header_lines):
-
-        candidate = line.strip(
-            ":;- "
-        )
-
-        if not GENERIC_COURSE_CODE_RE.fullmatch(
-            candidate
-        ):
-            continue
-
-        course_code = candidate.upper()
-
-        # ----------------------------------------------------
-        # Reconstruct course name from following lines.
-        # ----------------------------------------------------
-
-        name_parts = []
-
-        for next_line in header_lines[i + 1:i + 6]:
-
-            if not next_line:
+    lines = [clean_line(line) for line in text.splitlines() if clean_line(line)]
+    for line in lines[:30]:
+        m = re.search(r"([A-Z]{2,6}[C]?\s*\d{3,4})\s*[:\-]?\s*(.+)", line, re.IGNORECASE)
+        if m:
+            course_code = m.group(1).replace(" ", "").upper()
+            course_name = m.group(2).strip()
+            if len(course_name) < 5:
+                name_match = re.search(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", line)
+                if name_match:
+                    course_name = name_match.group(1)
+            if "course code" in course_code.lower() or "course name" in course_name.lower():
                 continue
-
-            name_parts.append(
-                next_line
-            )
-
-        course_name = clean_line(
-            " ".join(name_parts)
-        )
-
-        # If course is already known, use official name.
-        if course_code in COURSES:
-
-            course_name = COURSES[
-                course_code
-            ]
-
-        if course_name:
-
-            return {
-                "course_code": course_code,
-                "course_name": course_name
-            }
-
+            return {"course_code": course_code, "course_name": course_name}
     return None
 
 
@@ -373,7 +198,7 @@ def assign_course_boundaries(pages):
         result.append({
             "page": page["page"],
             "text": page["text"],
-            "course": current_course
+            "course": current_course if current_course else {"course_code": "GLOBAL", "course_name": "General Information"}
         })
 
     return result
@@ -547,8 +372,7 @@ def chunk_syllabus_pages(
         # Ignore pages before the first detected course.
         # ----------------------------------------------------
 
-        if course is None:
-            continue
+
 
         new_course_code = course[
             "course_code"
