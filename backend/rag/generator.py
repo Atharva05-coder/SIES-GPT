@@ -132,6 +132,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         # If the query heavily implies looking for books/tools but we found NONE in the context, return early to prevent 3B hallucination
         return "I could not find the requested books, tools, or references in the provided syllabus pages."
 
+    is_counting = re.search(r"\b(how many|how much|count|total number|number of)\b", check_query, re.IGNORECASE)
+    if is_counting and re.search(r"\b(modules?)\b", check_query, re.IGNORECASE) and expected_modules:
+        return f"According to the syllabus, there are {len(set(expected_modules))} modules listed for this course."
+
     if all_experiments:
         # Check for range request (e.g., "5 to 11" or "5-11")
         start_idx = 1
@@ -153,6 +157,7 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         filtered_experiments = [v for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx]
         
         is_counting = re.search(r"\b(how many|how much|count|total number|number of)\b", check_query, re.IGNORECASE)
+
         if is_counting and all_experiments:
             # For counting queries: scan context for the term work requirement and return directly
             total_listed = len(all_experiments)
