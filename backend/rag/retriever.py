@@ -384,19 +384,22 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         content_overlap = query_tokens & set(_tokenize(section["text"]))
         content_overlap = {token for token in content_overlap if not token.isdigit()}
 
-        if is_lab_request and not re.search(
-            r"\blab\b", section["header"], re.IGNORECASE
-        ):
-            continue
-        if is_outline_request and not subject_overlap and not code_match:
+        module_headers = re.findall(r"(?im)^\s*\d+\.0\s+(.+?)\s+\d+\s*$", section["text"])
+        module_tokens = set()
+        for h in module_headers:
+            module_tokens.update(_tokenize(h))
+        module_overlap = {token for token in (query_tokens & module_tokens) if not token.isdigit()}
+
+        if is_outline_request and not subject_overlap and not code_match and not module_overlap:
             continue
         # Ratio check removed
-        if is_lab_request and not subject_overlap and not code_match:
+        if is_lab_request and not subject_overlap and not code_match and not module_overlap:
             continue
-        if not code_match and not subject_overlap:
+        if not code_match and not subject_overlap and not module_overlap:
             continue
 
         score += len(subject_overlap) * 2.0
+        score += len(module_overlap) * 1.5
         if code_match:
             score += 100.0
             

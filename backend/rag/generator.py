@@ -118,9 +118,11 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                         all_experiments[current_num]["full"].append(line)
 
         context_parts.append(
-            f"SOURCE: {metadata.get('filename')}\n"
-            f"PAGES: {page_list}\n\n"
-            f"CONTENT:\n{text}"
+            f"<source_document>\n"
+            f"<filename>{metadata.get('filename')}</filename>\n"
+            f"<pages>{page_list}</pages>\n"
+            f"<content>\n{text}\n</content>\n"
+            f"</source_document>"
         )
 
     if not all_experiments and re.search(r"\b(experiments?|labs?|practicals?)\b", check_query, re.IGNORECASE):
@@ -226,6 +228,8 @@ Rules:
 9. Lab Experiments: If the user asks for lab experiments, you MUST carefully scan the entire text and extract EVERY SINGLE numbered experiment (there are often 10 to 15+ experiments). DO NOT stop early or skip any. FORMATTING: If the user explicitly asks for an "experiments list", provide ONLY the title or a very short 1-sentence summary of each experiment to save space. If the user just asks for "experiments" (without the word 'list'), provide the full description for each experiment.
 10. HINTS: If the provided context starts with a "HINT:" block containing pre-extracted experiments or tools, you MUST copy those exact items into your answer. Do not ignore the hint.
   11. If the context contains tabular data (like semester credit distributions or course nomenclatures), you MUST format your answer as a properly formatted Markdown table (| Column 1 | Column 2 |) so it is readable and DO NOT truncate the table.{module_requirement}
+  12. Specific Module Requests: If the user asks for the contents or subtopics of a specific module (e.g. 'finite automata'), provide ONLY the units/subtopics for that exact module as a clean list or table. Do NOT output raw syllabus text, and do NOT include other unrelated modules.
+  13. OUTPUT FORMAT: Do NOT regurgitate or copy the SOURCE CONTEXT back to the user. Start your answer immediately with the requested information.
 
 SOURCE CONTEXT:
 ======================
