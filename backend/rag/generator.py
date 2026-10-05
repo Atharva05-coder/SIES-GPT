@@ -125,9 +125,8 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
             f"</source_document>"
         )
 
-    if not all_experiments and re.search(r"\b(experiments?|labs?|practicals?)\b", check_query, re.IGNORECASE):
-        # We did not find any experiments
-        pass
+    if not all_experiments and re.search(r"\b(experiments?|practicals?|tasks?)\b", check_query, re.IGNORECASE):
+        return "I could not find any laboratory experiments or practicals listed in the syllabus for this course."
 
     found_refs = any("REFERENCES/TOOLS" in h for h in global_hints)
     if not found_refs and re.search(r"\b(references?|textbooks?|books?|online references?|software tools?|hardware tools?|tools?)\b", check_query, re.IGNORECASE) and not re.search(r"\bsoftware engineering\b", check_query, re.IGNORECASE):
@@ -226,7 +225,7 @@ Rules:
 7. Cross-Referencing Electives & Minors: If the user asks for electives or Multidisciplinary Minors (MDM) in a specific semester, you must list EVERY category explicitly (e.g. 'Program Elective-III', 'Program Elective-IV') as separate tables or lists. Do not merge them! When extracting domains/tracks, note that PDF text flattening can cause headers to wrap. For example, 'Network and Security' or 'Artificial Intelligence' might span multiple lines under 'Technology Bucket'. The actual course codes below the headers (e.g. CEPEC7011, CEPEC7012, CEPEC7013, CEPEC7014) map 1-to-1 horizontally to those domain headers (e.g. General, Smart Systems, Network and Security, Artificial Intelligence). Align them carefully and output separate Markdown tables for EACH elective category. For example, if you see both 'Program Elective-III' AND 'Program Elective-IV', you MUST output a table for Program Elective-III, and then another separate table for Program Elective-IV. DO NOT stop after the first table. (e.g., both 'Program Elective-III' and 'Program Elective-IV' if present). Then, you MUST scan the other pages to find the detailed lists for EVERY category you found. List the ACTUAL SUBJECT NAMES for each category (e.g., "Advanced Database Management System"). Do NOT just output generic placeholders like "CEPEC501X". NEVER list electives from other semesters.
 8. Mention the referred source pages exactly once naturally in the first sentence of your response.. Do NOT append a separate 'Sources' or 'References' list at the end of your answer.
 9. Lab Experiments: If the user asks for lab experiments, you MUST carefully scan the entire text and extract EVERY SINGLE numbered experiment (there are often 10 to 15+ experiments). DO NOT stop early or skip any. FORMATTING: If the user explicitly asks for an "experiments list", provide ONLY the title or a very short 1-sentence summary of each experiment to save space. If the user just asks for "experiments" (without the word 'list'), provide the full description for each experiment.
-10. HINTS: If the provided context starts with a "HINT:" block containing pre-extracted experiments or tools, you MUST copy those exact items into your answer. Do not ignore the hint.
+10. HINTS: If the provided context text explicitly contains a ">>> CRITICAL HINT:" block at the very top, you MUST incorporate its contents into your answer. Do NOT invent or generate your own hints.
   11. If the context contains tabular data (like semester credit distributions or course nomenclatures), you MUST format your answer as a properly formatted Markdown table (| Column 1 | Column 2 |) so it is readable and DO NOT truncate the table.{module_requirement}
   12. Specific Module Requests: If the user asks for the contents or subtopics of a specific module (e.g. 'finite automata'), provide ONLY the units/subtopics for that exact module as a clean list or table. Do NOT output raw syllabus text, and do NOT include other unrelated modules.
   13. OUTPUT FORMAT: Do NOT regurgitate or copy the SOURCE CONTEXT back to the user. Start your answer immediately with the requested information.
