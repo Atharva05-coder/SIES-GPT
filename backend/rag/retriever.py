@@ -405,6 +405,8 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
             
         if not is_lab_request and not re.search(r"\blab\b", section["header"], re.IGNORECASE):
             score += 5.0
+        elif is_lab_request and re.search(r"\blab\b", section["header"], re.IGNORECASE):
+            score += 10.0
             
         ranked_sections.append((score, section, bool(subject_overlap)))
 
