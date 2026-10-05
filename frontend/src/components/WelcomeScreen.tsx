@@ -15,7 +15,7 @@ function WelcomeScreen({
 
       {/* Heading */}
       <h1 className="welcome-title">
-        Welcome to SIES GPT
+        Welcome to Campus AI
       </h1>
 
       <p className="welcome-description">

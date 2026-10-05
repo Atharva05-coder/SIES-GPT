@@ -14,7 +14,7 @@ function Sidebar({ onNewChat }: SidebarProps) {
 
         <div>
           <div className="sidebar-logo-text">
-            SIES GPT
+            Campus AI
           </div>
 
           <span className="header-subtitle">

@@ -17,7 +17,7 @@ function Header({ onMenuClick }: HeaderProps) {
 
         <div>
           <div className="header-title">
-            SIES GPT
+            Campus AI
           </div>
 
           <div className="header-subtitle">

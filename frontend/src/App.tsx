@@ -203,7 +203,7 @@ function App() {
         {
           role: "assistant",
           content:
-            "Sorry, I couldn't connect to the SIES GPT server. Please make sure the backend is running.",
+            "Sorry, I couldn't connect to the Campus AI server. Please make sure the backend is running.",
         },
         userMessage,
       );
@@ -279,7 +279,7 @@ function App() {
           <div className="sidebar-logo-icon">S</div>
 
           <div>
-            <div className="sidebar-logo-text">SIES GPT</div>
+            <div className="sidebar-logo-text">Campus AI</div>
 
             <span className="header-subtitle">AI Assistant</span>
           </div>
@@ -401,7 +401,7 @@ function App() {
             </button>
 
             <div>
-              <div className="header-title">SIES GPT</div>
+              <div className="header-title">Campus AI</div>
 
               <div className="header-subtitle">
                 Knowledge Assistant for SIES GST
@@ -473,7 +473,7 @@ function App() {
             <div className="welcome-screen">
               <div className="welcome-icon">✦</div>
 
-              <h1 className="welcome-title">Welcome to SIES GPT</h1>
+              <h1 className="welcome-title">Welcome to Campus AI</h1>
 
               <p className="welcome-description">
                 Your AI-powered assistant for SIES Graduate School of
@@ -565,7 +565,7 @@ function App() {
 
                   <div className="message-content-wrapper">
                     <div className="message-name">
-                      {msg.role === "user" ? "You" : "SIES GPT"}
+                      {msg.role === "user" ? "You" : "Campus AI"}
                     </div>
 
                     <div className="message-bubble">
@@ -608,7 +608,7 @@ function App() {
                   <div className="message-avatar">✦</div>
 
                   <div className="message-content-wrapper">
-                    <div className="message-name">SIES GPT</div>
+                    <div className="message-name">Campus AI</div>
 
                     <div className="message-bubble loading-bubble">
                       <span></span>
