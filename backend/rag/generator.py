@@ -140,15 +140,24 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         # Check for range request (e.g., "5 to 11" or "5-11")
         start_idx = 1
         end_idx = 50
-        range_match = re.search(r'\b(?:from\s+)?(\d+)\s*(?:to|-)\s*(\d+)\b', check_query, re.IGNORECASE)
-        single_match = re.search(r'\b(?:experiments?|practicals?|tasks?)\s+(\d+)\b', check_query, re.IGNORECASE)
+        word_to_num = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10}
+        
+        range_match = re.search(r'\b(?:from\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:to|-)\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', check_query, re.IGNORECASE)
+        first_n_match = re.search(r'\bfirst\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', check_query, re.IGNORECASE)
+        single_match = re.search(r'\b(?:experiments?|practicals?|tasks?)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', check_query, re.IGNORECASE)
         nth_match = re.search(r'\b(\d+)(?:st|nd|rd|th)?\s+(?:experiments?|practicals?|tasks?)\b', check_query, re.IGNORECASE)
         
+        def parse_num(n):
+            return int(n) if n.isdigit() else word_to_num[n.lower()]
+
         if range_match:
-            start_idx = int(range_match.group(1))
-            end_idx = int(range_match.group(2))
+            start_idx = parse_num(range_match.group(1))
+            end_idx = parse_num(range_match.group(2))
+        elif first_n_match:
+            start_idx = 1
+            end_idx = parse_num(first_n_match.group(1))
         elif single_match:
-            start_idx = int(single_match.group(1))
+            start_idx = parse_num(single_match.group(1))
             end_idx = start_idx
         elif nth_match:
             start_idx = int(nth_match.group(1))
@@ -175,7 +184,11 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         if filtered_experiments and not is_counting and re.search(r"\b(experiments?|practicals?|tasks?|list)\b", check_query, re.IGNORECASE):
             if re.search(r"\blist\b", check_query, re.IGNORECASE):
                 # User asked for a list (short titles only)
-                exp_list_str = "\n".join(f"{k}. {v['title']}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
+                def make_short(title):
+                    parts = title.split('.')
+                    if len(parts[0]) < 100: return parts[0] + '.'
+                    return parts[0][:100] + '...'
+                exp_list_str = "\n".join(f"{k}. {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
                 return f"Here is the requested list of experiments from the syllabus:\n\n{exp_list_str}"
             else:
                 # User asked for experiments (full descriptions)
