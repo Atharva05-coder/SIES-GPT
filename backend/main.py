@@ -64,3 +64,6 @@ def chat(request: ChatRequest):
     result = ask_sies_gpt(request.message)
 
     return result
+
+class SIESChatRequest(BaseModel):
+    message: str
