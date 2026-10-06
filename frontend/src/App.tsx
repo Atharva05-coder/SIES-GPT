@@ -577,20 +577,29 @@ function App() {
                         <div className="sources">
                           <div className="sources-title">📚 Sources</div>
 
-                          {msg.sources.map((source, sourceIndex) => (
+                          {Object.values(
+                            msg.sources.reduce((acc, source) => {
+                              if (!acc[source.filename]) {
+                                acc[source.filename] = { ...source, pages: [source.page] };
+                              } else if (!acc[source.filename].pages.includes(source.page)) {
+                                acc[source.filename].pages.push(source.page);
+                              }
+                              return acc;
+                            }, {} as Record<string, any>)
+                          ).map((groupedSource: any, sourceIndex) => (
                             <a
                               key={sourceIndex}
                               className="source-card"
-                              href={source.url}
+                              href={groupedSource.url}
                               target="_blank"
                               rel="noopener noreferrer"
                             >
                               <span className="source-icon">📄</span>
 
                               <div className="source-info">
-                                <strong>{source.filename}</strong>
+                                <strong>{groupedSource.filename}</strong>
 
-                                <span>Page {source.page}</span>
+                                <span>{groupedSource.pages.length === 1 ? `Page ${groupedSource.pages[0]}` : `Pages ${groupedSource.pages.join(', ')}`}</span>
                               </div>
                             </a>
                           ))}
