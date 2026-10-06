@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Composer } from "./components/Composer";
 import { Header } from "./components/Header";
 import { MessageList } from "./components/MessageList";
 import { Notice } from "./components/Notice";
+import { Sidebar } from "./components/Sidebar";
 import { useChat } from "./hooks/useChat";
 import { useHealth } from "./hooks/useHealth";
 import { useTheme } from "./theme";
@@ -9,18 +11,30 @@ import { useTheme } from "./theme";
 export default function App() {
   const { settings, update, toggleMode, reset } = useTheme();
   const { health, unreachable } = useHealth();
-  const { messages, busy, send, stop, clear, mode, setMode } = useChat();
+  const { messages, busy, send, stop, clear, mode, setMode, chats, activeChatId, createNewChat, selectChat, deleteChat } = useChat();
   const ready = Boolean(health?.ready) && !unreachable;
+  
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
     <>
       <div className="backdrop" aria-hidden="true" />
+      <Sidebar 
+        chats={chats}
+        activeChatId={activeChatId}
+        onSelectChat={selectChat}
+        onNewChat={createNewChat}
+        onDeleteChat={deleteChat}
+        isOpen={sidebarOpen}
+        setIsOpen={setSidebarOpen}
+      />
       <div className="shell">
         <Header
           settings={settings}
           onThemeChange={update}
           onThemeReset={reset}
           onToggleMode={toggleMode}
+          onMenuClick={() => setSidebarOpen(true)}
         />
         <Notice health={health} unreachable={unreachable} />
         
