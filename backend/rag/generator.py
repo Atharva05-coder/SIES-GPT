@@ -1,6 +1,7 @@
 import re
 
-import ollama
+from openai import OpenAI
+import os
 
 
 def generate_answer(question: str, retrieved_chunks, original_question: str = None):
@@ -241,12 +242,16 @@ USER QUESTION:
 ANSWER:
 """
 
-    response = ollama.generate(
-        model="llama3.2:3b",
-        prompt=prompt,
-        options={"temperature": 0.0}
+    client = OpenAI(
+        base_url=os.environ.get("LLM_BASE_URL", "https://llama.atharva-amrutkar.in/v1"),
+        api_key=os.environ.get("LLM_API_KEY", "V7mQ2xL9pR4kT8nC")
     )
-    answer = response["response"]
+    response = client.chat.completions.create(
+        model="llama3.2:3b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0
+    )
+    answer = response.choices[0].message.content
 
     if expected_modules:
         returned_modules = [
