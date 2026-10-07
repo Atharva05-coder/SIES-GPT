@@ -118,15 +118,17 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                     if current_num in all_experiments:
                         all_experiments[current_num]["full"].append(line)
 
+        course_info = f"<course>{metadata.get('course_name', 'Unknown')}</course>\n" if 'course_name' in metadata else ""
         context_parts.append(
             f"<source_document>\n"
             f"<filename>{metadata.get('filename')}</filename>\n"
             f"<pages>{page_list}</pages>\n"
+            f"{course_info}"
             f"<content>\n{text}\n</content>\n"
             f"</source_document>"
         )
 
-    if not all_experiments and re.search(r"\b(experiments?|practicals?|tasks?)\b", check_query, re.IGNORECASE):
+    if not all_experiments and re.search(r"\b(experiments?|practicals?|tasks?)\b", check_query, re.IGNORECASE) and not re.search(r"\b(does|do|is|are|which|why|when|who|how|whether|can|what is|tell me about)\b", check_query, re.IGNORECASE):
         return "I could not find any laboratory experiments or practicals listed in the syllabus for this course."
 
     found_refs = any("REFERENCES/TOOLS" in h for h in global_hints)
@@ -183,19 +185,42 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
             else:
                 return f"According to the syllabus, there are {total_listed} experiments listed for this lab."
 
-        if filtered_experiments and not is_counting and re.search(r"\b(experiments?|practicals?|tasks?|list)\b", check_query, re.IGNORECASE):
+        has_exp_keyword = re.search(r"\b(experiments?|practicals?|tasks?|list)\b", check_query, re.IGNORECASE)
+        is_asking_attribute = re.search(r"\b(does|do|is|are|which|why|when|who|how|whether|can|what is|tell me about)\b", check_query, re.IGNORECASE)
+        is_explicit_list = re.search(r"\b(what are the|list|give me|show me|all|detail|describe)\b", check_query, re.IGNORECASE)
+        
+        should_bypass = False
+        if has_exp_keyword and not is_counting:
+            if is_explicit_list:
+                should_bypass = True
+            elif not is_asking_attribute:
+                should_bypass = True
+
+        if filtered_experiments and should_bypass:
             if re.search(r"\blist\b", check_query, re.IGNORECASE):
                 # User asked for a list (short titles only)
                 def make_short(title):
                     parts = title.split('.')
                     if len(parts[0]) < 100: return parts[0] + '.'
                     return parts[0][:100] + '...'
-                exp_list_str = "\n".join(f"{k}. {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
+                exp_list_str = "\n".join(f"**Experiment {k}:** {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
                 return f"Here is the requested list of experiments from the syllabus:\n\n{exp_list_str}"
             else:
-                # User asked for experiments (full descriptions)
-                exp_full_str = "\n\n".join(re.sub(r'[^\x00-\x7F]+', '-', "\n".join(v['full'])) for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
-                return f"Here are the requested experiments and their full descriptions from the syllabus:\n\n{exp_full_str}"
+                # User asked for experiments (full descriptions with tasks)
+                exp_blocks = []
+                for k, v in sorted(all_experiments.items()):
+                    if start_idx <= k <= end_idx:
+                        full_desc = re.sub(r'[^\x00-\x7F]+', '-', "\n".join(v['full']))
+                        lines = full_desc.split("\n")
+                        if len(lines) > 0:
+                            header = lines[0]
+                            tasks = "\n".join(f"- {line.strip()}" for line in lines[1:] if line.strip())
+                            if tasks:
+                                exp_blocks.append(f"### Experiment {k}: {header}\n**Tasks & Details:**\n{tasks}")
+                            else:
+                                exp_blocks.append(f"### Experiment {k}: {header}")
+                exp_full_str = "\n\n".join(exp_blocks)
+                return f"Here are the detailed experiments (including tasks and requirements) from the syllabus:\n\n{exp_full_str}" 
         
     context = "\n\n".join(context_parts)
     if global_hints:
