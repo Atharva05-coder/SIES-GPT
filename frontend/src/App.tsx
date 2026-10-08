@@ -38,15 +38,19 @@ export default function App() {
         />
         <Notice health={health} unreachable={unreachable} />
         
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '10px', gap: '20px', color: 'var(--text)' }}>
-          <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input type="radio" name="mode" value="website" checked={mode === 'website'} onChange={() => setMode('website')} />
+        <div className="segmented-control glass">
+          <button 
+            className={`segment ${mode === 'website' ? 'active' : ''}`}
+            onClick={() => setMode('website')}
+          >
             Website (CampusAI)
-          </label>
-          <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input type="radio" name="mode" value="syllabus" checked={mode === 'syllabus'} onChange={() => setMode('syllabus')} />
+          </button>
+          <button 
+            className={`segment ${mode === 'syllabus' ? 'active' : ''}`}
+            onClick={() => setMode('syllabus')}
+          >
             Syllabus (SIES-GPT)
-          </label>
+          </button>
         </div>
         <MessageList messages={messages} onPick={send} disabled={!ready || busy} />
 
