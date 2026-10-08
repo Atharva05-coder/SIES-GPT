@@ -1,5 +1,10 @@
 import os
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load from backend/.env explicitly
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+load_dotenv(env_path)
 
 EMBEDDING_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 

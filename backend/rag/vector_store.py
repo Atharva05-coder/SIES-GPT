@@ -1,7 +1,7 @@
 import os
 import chromadb
 
-COLLECTION_NAME = "sies_documents"
+COLLECTION_NAME = "sies_documents_bge_m3"
 
 # Ensure the database is always in the backend/ directory, no matter where the script is run from
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +16,7 @@ def get_collection():
         name=COLLECTION_NAME,
         metadata={
             "description": "SIES GST R24 syllabus RAG index",
-            "embedding_model": "nomic-embed-text:latest"
+            "embedding_model": "bge-m3"
         }
     )
 
@@ -32,7 +32,7 @@ def reset_collection():
         name=COLLECTION_NAME,
         metadata={
             "description": "SIES GST R24 syllabus RAG index",
-            "embedding_model": "nomic-embed-text:latest"
+            "embedding_model": "bge-m3"
         }
     )
     return collection
