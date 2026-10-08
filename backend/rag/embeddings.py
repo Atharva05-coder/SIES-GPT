@@ -1,29 +1,26 @@
-import ollama
+import os
+from openai import OpenAI
 
+EMBEDDING_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 
-EMBEDDING_MODEL = "nomic-embed-text:latest"
-
+client = OpenAI(
+    base_url=os.environ.get("EMBED_BASE_URL", "https://embed.atharva-amrutkar.in/v1"),
+    api_key=os.environ.get("EMBED_API_KEY", "")
+)
 
 def create_embedding(text: str):
     """
-    Create an embedding using Ollama.
+    Create an embedding using the remote OpenAI-compatible endpoint.
     """
-
     if not text or not text.strip():
-        raise ValueError(
-            "Cannot create embedding for empty text."
-        )
+        raise ValueError("Cannot create embedding for empty text.")
 
-    response = ollama.embed(
+    response = client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=text
     )
 
-    embeddings = response.get("embeddings")
+    if not response.data:
+        raise RuntimeError("The embedding endpoint returned no data.")
 
-    if not embeddings:
-        raise RuntimeError(
-            "Ollama returned no embeddings."
-        )
-
-    return embeddings[0]
+    return response.data[0].embedding
