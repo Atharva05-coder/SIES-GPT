@@ -31,7 +31,6 @@ function readChatHistory(): ChatSession[] {
 }
 
 export function useChat() {
-  const [mode, setMode] = useState<"website" | "syllabus">("syllabus");
   const [chats, setChats] = useState<ChatSession[]>(readChatHistory);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => localStorage.getItem(ACTIVE_CHAT_KEY));
   const [busy, setBusy] = useState(false);
@@ -57,14 +56,14 @@ export function useChat() {
     setChats(prev => {
       const chatIndex = prev.findIndex(c => c.id === activeChatId);
       if (chatIndex === -1) return prev;
-      
+
       const newChats = [...prev];
       const chat = newChats[chatIndex];
       if (chat.messages.length === 0) return prev;
-      
+
       const updatedMessages = [...chat.messages];
       updatedMessages[updatedMessages.length - 1] = fn(updatedMessages[updatedMessages.length - 1]);
-      
+
       newChats[chatIndex] = { ...chat, messages: updatedMessages, updatedAt: Date.now() };
       return newChats;
     });
@@ -116,14 +115,14 @@ export function useChat() {
       setChats(prev => {
         const chatIndex = prev.findIndex(c => c.id === currentChatId);
         if (chatIndex === -1) return prev;
-        
+
         const newChats = [...prev];
         const chat = newChats[chatIndex];
-        
+
         const isFirstMessage = chat.messages.length === 0;
         let title = chat.title;
         if (isFirstMessage) {
-           title = content.length > 30 ? content.slice(0, 27) + "..." : content;
+          title = content.length > 30 ? content.slice(0, 27) + "..." : content;
         }
 
         newChats[chatIndex] = {
@@ -138,7 +137,7 @@ export function useChat() {
         };
         return newChats;
       });
-      
+
       setBusy(true);
 
       const controller = new AbortController();
@@ -167,7 +166,7 @@ export function useChat() {
       };
 
       try {
-        await streamChat(history, onEvent, controller.signal, mode);
+        await streamChat(history, onEvent, controller.signal);
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === "AbortError";
         if (!aborted) {
@@ -180,7 +179,7 @@ export function useChat() {
         abortRef.current = null;
       }
     },
-    [chats, activeChatId, busy, patchLast, createNewChat, mode],
+    [chats, activeChatId, busy, patchLast, createNewChat],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -197,14 +196,12 @@ export function useChat() {
     }
   }, [activeChatId]);
 
-  return { 
-    messages, 
-    busy, 
-    send, 
-    stop, 
-    clear, 
-    mode, 
-    setMode,
+  return {
+    messages,
+    busy,
+    send,
+    stop,
+    clear,
     chats,
     activeChatId,
     createNewChat,

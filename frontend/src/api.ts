@@ -11,47 +11,9 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 export async function streamChat(
   messages: { role: Role; content: string }[],
   onEvent: (event: StreamEvent) => void,
-  signal: AbortSignal,
-  mode: "website" | "syllabus" = "website"
+  signal: AbortSignal
 ): Promise<void> {
-  if (mode === "syllabus") {
-    const lastMessage = messages[messages.length - 1];
-    const res = await fetch(`${BASE}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: lastMessage.content }),
-      signal,
-    });
-
-    if (!res.ok) {
-      throw new Error(`Request failed (${res.status})`);
-    }
-
-    const data = await res.json();
-    if (data.answer) {
-      onEvent({ type: "token", text: data.answer });
-    }
-    if (data.sources) {
-      const grouped = Object.values(
-        data.sources.reduce((acc: any, s: any) => {
-          if (!acc[s.filename]) {
-            acc[s.filename] = { ...s, pages: [s.page] };
-          } else if (!acc[s.filename].pages.includes(s.page)) {
-            acc[s.filename].pages.push(s.page);
-          }
-          return acc;
-        }, {})
-      ).map((groupedSource: any) => ({
-        url: groupedSource.url || `https://siesgst.edu.in/images/${encodeURIComponent(groupedSource.filename)}`,
-        title: `${groupedSource.filename} (Pages ${groupedSource.pages.join(", ")})`
-      }));
-      onEvent({ type: "sources", sources: grouped });
-    }
-    return;
-  }
-
-  // Website mode (CampusAI)
-  const res = await fetch(`${BASE}/api/chat`, {
+  const res = await fetch(`${BASE}/api/smart_chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),

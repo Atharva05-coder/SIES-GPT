@@ -248,6 +248,82 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+from agent import agent as intent_agent
+from agents import Runner
+
+@app.post("/api/smart_chat")
+async def smart_chat(req: ChatRequest) -> StreamingResponse:
+    if req.messages[-1].role != "user":
+        raise HTTPException(status_code=422, detail="The last message must be from the user.")
+        
+    last_message = req.messages[-1].content
+    
+    # Classify intent using the new agent in agent.py
+    try:
+        from agent import Message
+        result = await Runner.run(intent_agent, last_message)
+        parsed = result.final_output_as(Message)
+        intent = parsed.intent
+    except Exception as e:
+        log.error(f"Intent classifier failed: {e}")
+        intent = "website"
+        
+    log.info(f"Routed query to: {intent}")
+    
+    if intent == "syllabus":
+        async def stream_syllabus():
+            try:
+                yield sse("tool_call", name="search_syllabus")
+                from rag.rag_pipeline import ask_sies_gpt
+                result = await asyncio.to_thread(ask_sies_gpt, last_message)
+                yield sse("tool_output")
+                yield sse("token", text=result["answer"])
+                
+                # Group sources by filename so pages are grouped together
+                grouped_dict = {}
+                for s in result.get("sources", []):
+                    filename = s.get("filename")
+                    page = s.get("page")
+                    url = s.get("url") or f"https://siesgst.edu.in/images/{filename}"
+                    
+                    if filename not in grouped_dict:
+                        grouped_dict[filename] = {"url": url, "pages": []}
+                    
+                    if page not in grouped_dict[filename]["pages"]:
+                        grouped_dict[filename]["pages"].append(page)
+                
+                grouped_sources = []
+                for filename, data in grouped_dict.items():
+                    pages_str = ", ".join(str(p) for p in sorted(data["pages"]))
+                    title = f"{filename} (Pages {pages_str})" if len(data["pages"]) > 1 else f"{filename} (Page {pages_str})"
+                    grouped_sources.append({
+                        "url": data["url"],
+                        "title": title
+                    })
+                
+                if grouped_sources:
+                    yield sse("sources", sources=grouped_sources)
+                    
+                yield sse("done")
+            except Exception as e:
+                log.exception("Syllabus stream failed")
+                yield sse("error", message="Syllabus search failed.")
+                
+        return StreamingResponse(
+            stream_syllabus(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
+    else:
+        app_agent, index = state.agent, state.index
+        if app_agent is None or index is None:
+            raise HTTPException(status_code=503, detail="Index not ready.")
+        return StreamingResponse(
+            stream_answer(app_agent, index, req.messages),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
 
 @app.post("/api/refresh", status_code=202)
 async def refresh(x_admin_token: str | None = Header(default=None)) -> dict[str, str]:

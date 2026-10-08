@@ -11,7 +11,7 @@ import { useTheme } from "./theme";
 export default function App() {
   const { settings, update, toggleMode, reset } = useTheme();
   const { health, unreachable } = useHealth();
-  const { messages, busy, send, stop, clear, mode, setMode, chats, activeChatId, createNewChat, selectChat, deleteChat } = useChat();
+  const { messages, busy, send, stop, clear, chats, activeChatId, createNewChat, selectChat, deleteChat } = useChat();
   const ready = Boolean(health?.ready) && !unreachable;
   
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -37,21 +37,6 @@ export default function App() {
           onMenuClick={() => setSidebarOpen(true)}
         />
         <Notice health={health} unreachable={unreachable} />
-        
-        <div className="segmented-control glass">
-          <button 
-            className={`segment ${mode === 'website' ? 'active' : ''}`}
-            onClick={() => setMode('website')}
-          >
-            Website (CampusAI)
-          </button>
-          <button 
-            className={`segment ${mode === 'syllabus' ? 'active' : ''}`}
-            onClick={() => setMode('syllabus')}
-          >
-            Syllabus (SIES-GPT)
-          </button>
-        </div>
         <MessageList messages={messages} onPick={send} disabled={!ready || busy} />
 
         <Composer
