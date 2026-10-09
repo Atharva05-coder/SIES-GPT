@@ -200,10 +200,15 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
             if re.search(r"\blist\b", check_query, re.IGNORECASE):
                 # User asked for a list (short titles only)
                 def make_short(title):
-                    parts = title.split('.')
-                    if len(parts[0]) < 100: return parts[0] + '.'
-                    return parts[0][:100] + '...'
-                exp_list_str = "\n".join(f"**Experiment {k}:** {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
+                    clean_title = re.sub(r'[^\x00-\x7F]+', '-', title).strip()
+                    parts = clean_title.split('.')
+                    short = parts[0]
+                    if len(short) > 120: short = short[:120] + '...'
+                    # Clean trailing commas/punctuation
+                    short = re.sub(r'[,;\s]+$', '', short)
+                    return short + '.'
+                
+                exp_list_str = "\n".join(f"- **Experiment {k}:** {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
                 return f"Here is the requested list of experiments from the syllabus:\n\n{exp_list_str}"
             else:
                 # User asked for experiments (full descriptions with tasks)
@@ -214,11 +219,11 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                         lines = full_desc.split("\n")
                         if len(lines) > 0:
                             header = lines[0]
-                            tasks = "\n".join(f"- {line.strip()}" for line in lines[1:] if line.strip())
+                            tasks = "\n".join(f"  - {line.strip()}" for line in lines[1:] if line.strip())
                             if tasks:
-                                exp_blocks.append(f"### Experiment {k}: {header}\n**Tasks & Details:**\n{tasks}")
+                                exp_blocks.append(f"- **Experiment {k}:** {header}\n  **Tasks & Details:**\n{tasks}")
                             else:
-                                exp_blocks.append(f"### Experiment {k}: {header}")
+                                exp_blocks.append(f"- **Experiment {k}:** {header}")
                 exp_full_str = "\n\n".join(exp_blocks)
                 return f"Here are the detailed experiments (including tasks and requirements) from the syllabus:\n\n{exp_full_str}" 
         

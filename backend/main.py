@@ -122,7 +122,7 @@ app.add_middleware(
 # -------------------------------- schemas --------------------------------- #
 class Msg(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=4000)
+    content: str = Field(min_length=1, max_length=100000)
 
 
 class ChatRequest(BaseModel):
