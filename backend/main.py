@@ -248,39 +248,45 @@ async def chat(req: ChatRequest) -> StreamingResponse:
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
 from agent import agent as intent_agent
 from agents import Runner
+
 
 @app.post("/api/smart_chat")
 async def smart_chat(req: ChatRequest) -> StreamingResponse:
     if req.messages[-1].role != "user":
-        raise HTTPException(status_code=422, detail="The last message must be from the user.")
-        
+        raise HTTPException(
+            status_code=422, detail="The last message must be from the user."
+        )
+
     last_message = req.messages[-1].content
-    
+
     # Classify intent using the new agent in agent.py
     try:
         from agent import Message
+
         result = await Runner.run(intent_agent, last_message)
         parsed = result.final_output_as(Message)
         intent = parsed.intent
     except Exception as e:
         log.error(f"Intent classifier failed: {e}")
         intent = "website"
-        
+
     log.info(f"Routed query to: {intent}")
-    
+
     if intent == "syllabus":
+
         async def stream_syllabus():
             try:
                 yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
-                
+
                 from rag.rag_pipeline import ask_sies_gpt
                 import queue
                 import threading
-                
+
                 q = queue.Queue()
-                
+
                 def run():
                     try:
                         ask_sies_gpt(last_message, yield_callback=q.put)
@@ -288,10 +294,10 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
                         q.put(e)
                     finally:
                         q.put(None)
-                
+
                 t = threading.Thread(target=run)
                 t.start()
-                
+
                 while True:
                     item = await asyncio.to_thread(q.get)
                     if item is None:
@@ -301,38 +307,78 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
                     if isinstance(item, dict):
                         if item["type"] == "sources":
                             yield sse("tool_output")
-                            
+
                             grouped_dict = {}
                             for s in item.get("sources", []):
                                 filename = s.get("filename")
                                 page = s.get("page")
-                                url = s.get("url") or f"https://siesgst.edu.in/images/{filename}"
-                                
+                                url = (
+                                    s.get("url")
+                                    or f"https://siesgst.edu.in/images/{filename}"
+                                )
+
                                 if filename not in grouped_dict:
                                     grouped_dict[filename] = {"url": url, "pages": []}
-                                
+
                                 if page not in grouped_dict[filename]["pages"]:
                                     grouped_dict[filename]["pages"].append(page)
-                            
+
                             grouped_sources = []
                             for filename, data in grouped_dict.items():
-                                pages_str = ", ".join(str(p) for p in sorted(data["pages"]))
-                                title = f"{filename} (Pages {pages_str})" if len(data["pages"]) > 1 else f"{filename} (Page {pages_str})"
-                                grouped_sources.append({
-                                    "url": data["url"],
-                                    "title": title
-                                })
-                            
+                                pages_str = ", ".join(
+                                    str(p) for p in sorted(data["pages"])
+                                )
+                                title = (
+                                    f"{filename} (Pages {pages_str})"
+                                    if len(data["pages"]) > 1
+                                    else f"{filename} (Page {pages_str})"
+                                )
+                                grouped_sources.append(
+                                    {"url": data["url"], "title": title}
+                                )
+
                             if grouped_sources:
                                 yield sse("sources", sources=grouped_sources)
                         elif item["type"] == "token":
                             yield sse("token", text=item["text"])
-                
+
                 yield sse("done")
             except Exception as e:
                 log.exception("Syllabus stream failed")
                 yield sse("error", text=str(e))
-                
+
         return StreamingResponse(stream_syllabus(), media_type="text/event-stream")
 
+    else:
+        app_agent, index = state.agent, state.index
+        if app_agent is None or index is None:
+            raise HTTPException(status_code=503, detail="Index not ready.")
+        return StreamingResponse(
+            stream_answer(app_agent, index, req.messages),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
+
+@app.post("/api/refresh", status_code=202)
+async def refresh(x_admin_token: str | None = Header(default=None)) -> dict[str, str]:
+    expected = os.getenv("ADMIN_TOKEN")
+    if not expected:
+        raise HTTPException(
+            status_code=403, detail="Refresh is disabled (ADMIN_TOKEN not set)."
+        )
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid admin token.")
+    if state.building:
+        raise HTTPException(status_code=409, detail="A rebuild is already running.")
+    spawn(rebuild(refresh=True))
+    return {"status": "started"}
+
+
+class SIESChatRequest(BaseModel):
+    message: str
+
+
+@app.post("/chat")
+def sies_chat(request: SIESChatRequest):
+    return ask_sies_gpt(request.message)
