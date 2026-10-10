@@ -4,8 +4,15 @@ from openai import OpenAI
 import os
 
 
-def generate_answer(question: str, retrieved_chunks, original_question: str = None):
+def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
+
+    def early_return(ret_text):
+        if yield_callback:
+            yield_callback({"type": "token", "text": ret_text})
+        return ret_text
+
     check_query = original_question if original_question else question
+
     if "credit distribution" in check_query.lower() and "semester" in check_query.lower():
         return """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
 
@@ -129,16 +136,16 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         )
 
     if not all_experiments and re.search(r"\b(experiments?|practicals?|tasks?)\b", check_query, re.IGNORECASE) and not re.search(r"\b(does|do|is|are|which|why|when|who|how|whether|can|what is|tell me about)\b", check_query, re.IGNORECASE):
-        return "I could not find any laboratory experiments or practicals listed in the syllabus for this course."
+        return early_return("I could not find any laboratory experiments or practicals listed in the syllabus for this course.")
 
     found_refs = any("REFERENCES/TOOLS" in h for h in global_hints)
     if not found_refs and re.search(r"\b(references?|textbooks?|books?|online references?|software tools?|hardware tools?|tools?)\b", check_query, re.IGNORECASE) and not re.search(r"\bsoftware engineering\b", check_query, re.IGNORECASE):
         # If the query heavily implies looking for books/tools but we found NONE in the context, return early to prevent 3B hallucination
-        return "I could not find the requested books, tools, or references in the provided syllabus pages."
+        return early_return("I could not find the requested books, tools, or references in the provided syllabus pages.")
 
     is_counting = re.search(r"\b(how many|how much|count|total number|number of)\b", check_query, re.IGNORECASE)
     if is_counting and re.search(r"\b(modules?)\b", check_query, re.IGNORECASE) and expected_modules:
-        return f"According to the syllabus, there are {len(set(expected_modules))} modules listed for this course."
+        return early_return(f"According to the syllabus, there are {len(set(expected_modules))} modules listed for this course.")
 
     if all_experiments:
         # Check for range request (e.g., "5 to 11" or "5-11")
@@ -181,9 +188,9 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                     required_match = m.group(1)
                     break
             if required_match:
-                return f"According to the syllabus, students are required to complete at least {required_match} experiments from the {total_listed} listed experiments for this lab."
+                return early_return(f"According to the syllabus, students are required to complete at least {required_match} experiments from the {total_listed} listed experiments for this lab.")
             else:
-                return f"According to the syllabus, there are {total_listed} experiments listed for this lab."
+                return early_return(f"According to the syllabus, there are {total_listed} experiments listed for this lab.")
 
         has_exp_keyword = re.search(r"\b(experiments?|practicals?|tasks?|list)\b", check_query, re.IGNORECASE)
         is_asking_attribute = re.search(r"\b(does|do|is|are|which|why|when|who|how|whether|can|what is|tell me about)\b", check_query, re.IGNORECASE)
@@ -208,24 +215,42 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                     short = re.sub(r'[,;\s]+$', '', short)
                     return short + '.'
                 
-                exp_list_str = "\n".join(f"- **Experiment {k}:** {make_short(v['title'])}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
-                return f"Here is the requested list of experiments from the syllabus:\n\n{exp_list_str}"
+                exp_list_str = "\n".join(f"- **Experiment {k}:** {re.sub(r'^\\d+[\\.\\)]\\s*', '', make_short(v['title']))}" for k, v in sorted(all_experiments.items()) if start_idx <= k <= end_idx)
+                return early_return(f"Here is the requested list of experiments from the syllabus:\n\n{exp_list_str}")
             else:
                 # User asked for experiments (full descriptions with tasks)
                 exp_blocks = []
                 for k, v in sorted(all_experiments.items()):
                     if start_idx <= k <= end_idx:
-                        full_desc = re.sub(r'[^\x00-\x7F]+', '-', "\n".join(v['full']))
-                        lines = full_desc.split("\n")
-                        if len(lines) > 0:
-                            header = lines[0]
-                            tasks = "\n".join(f"  - {line.strip()}" for line in lines[1:] if line.strip())
-                            if tasks:
-                                exp_blocks.append(f"- **Experiment {k}:** {header}\n  **Tasks & Details:**\n{tasks}")
+
+                        full_desc = re.sub(r'[^\x00-\x7f]+', '-', "\n".join(v['full']))
+                        lines = [line.strip() for line in full_desc.split("\n") if line.strip()]
+                        formatted_lines = []
+                        for line in lines:
+                            if not formatted_lines:
+                                formatted_lines.append(line)
+                                continue
+                            prev = formatted_lines[-1]
+                            is_list_item = re.match(r'^([-*o]\s|[a-z]\)|\d+\.|Tasks?:)', line, re.IGNORECASE)
+                            prev_ends_sentence = re.search(r'[\.:;!?]$', prev)
+                            if not is_list_item and not prev_ends_sentence:
+                                formatted_lines[-1] = prev + " " + line
                             else:
-                                exp_blocks.append(f"- **Experiment {k}:** {header}")
+                                formatted_lines.append(line)
+                        
+                        # Strip duplicated experiment number
+                        header = formatted_lines[0]
+                        header = re.sub(r'^\d+[\.\)]\s*', '', header)
+                        formatted_lines[0] = header
+
+                        if len(formatted_lines) == 1:
+                            exp_blocks.append(f"- **Experiment {k}:** {formatted_lines[0]}")
+                        else:
+                            header = formatted_lines[0]
+                            body = "\n\n  ".join(formatted_lines[1:])
+                            exp_blocks.append(f"- **Experiment {k}:** {header}\n\n  {body}")
                 exp_full_str = "\n\n".join(exp_blocks)
-                return f"Here are the detailed experiments (including tasks and requirements) from the syllabus:\n\n{exp_full_str}" 
+                return early_return(f"Here are the detailed experiments (including tasks and requirements) from the syllabus:\n\n{exp_full_str}") 
         
     context = "\n\n".join(context_parts)
     if global_hints:
@@ -276,12 +301,29 @@ ANSWER:
         base_url=os.environ.get("LLM_BASE_URL", "https://llama.atharva-amrutkar.in/v1"),
         api_key=os.environ.get("LLM_API_KEY", "V7mQ2xL9pR4kT8nC")
     )
-    response = client.chat.completions.create(
-        model="llama3.2:3b",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0
-    )
-    answer = response.choices[0].message.content
+    if yield_callback:
+        response = client.chat.completions.create(
+            model="llama3.2:3b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            stream=True,
+            extra_body={"options": {"num_ctx": 8192}}
+        )
+        answer_chunks = []
+        for chunk in response:
+            if chunk.choices[0].delta.content:
+                text = chunk.choices[0].delta.content
+                answer_chunks.append(text)
+                yield_callback({"type": "token", "text": text})
+        answer = "".join(answer_chunks)
+    else:
+        response = client.chat.completions.create(
+            model="llama3.2:3b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            extra_body={"options": {"num_ctx": 8192}}
+        )
+        answer = response.choices[0].message.content
 
     if expected_modules:
         returned_modules = [
@@ -303,7 +345,8 @@ ANSWER:
             or returned_units != expected_units
             or returned_self_learning_sections < expected_self_learning_sections
         ):
-            return "\n\n".join(item["text"] for item in retrieved_chunks)
+            if yield_callback is None:
+                return early_return("\n\n".join(item["text"] for item in retrieved_chunks))
 
     if expected_semesters:
         roman_semesters = {
@@ -324,7 +367,8 @@ ANSWER:
             )
         }
         if not set(expected_semesters).issubset(returned_semesters):
-            return "\n\n".join(item["text"] for item in retrieved_chunks)
+            if yield_callback is None:
+                return early_return("\n\n".join(item["text"] for item in retrieved_chunks))
 
     return answer
 

@@ -772,6 +772,8 @@ def build_agent(
         openai_client=AsyncOpenAI(
             base_url=LLM_BASE_URL,
             api_key=LLM_API_KEY,
+            max_retries=0,
+            timeout=300.0
         ),
     )
 

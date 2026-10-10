@@ -1,68 +1,83 @@
 import json
+import os
+import glob
 from pathlib import Path
-
 from pypdf import PdfReader
+from dotenv import load_dotenv
+
+# Use the shiny new agents library for guaranteed structured output with Gemini!
+from agents import Agent, Runner, set_tracing_disabled
+from pydantic import BaseModel, Field
+
+set_tracing_disabled(True)
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-PDF_PATH = BASE_DIR / "data" / "TE CE R24 (1).pdf"
-OUTPUT_PATH = BASE_DIR / "data" / "te_ce_r24_structured.json"
-SOURCE_URL = "https://siesgst.edu.in/images/TE%20CE%20R24%20(1).pdf"
+DATA_DIR = BASE_DIR / "data"
 
-SEMESTER_V_COURSES = [
-    {
-        "code": "CEC501",
-        "name": "Theoretical Computer Science",
-        "category": "PCC",
-        "credits": 3,
-    },
-    {"code": "CEC502", "name": "Software Engineering", "category": "PCC", "credits": 3},
-    {"code": "CEC503", "name": "Computer Network", "category": "PCC", "credits": 3},
-    {
-        "code": "MDMC50X2",
-        "name": "Multidisciplinary Minor (MDM-II)",
-        "category": "MDM",
-        "credits": 3,
-    },
-    {
-        "code": "CEPEC501X",
-        "name": "Program Elective-I",
-        "category": "PEC",
-        "credits": 3,
-    },
-    {"code": "CEL501", "name": "DevOps Lab", "category": "PCC", "credits": 1},
-    {"code": "CEL502", "name": "Computer Network Lab", "category": "PCC", "credits": 1},
-    {
-        "code": "CEL503",
-        "name": "Interpersonal and Career Skills",
-        "category": "HSSM (AEC)",
-        "credits": 2,
-    },
-    {
-        "code": "MDML50X1",
-        "name": "Multidisciplinary Minor (MDM-II) Lab/Tutorial",
-        "category": "MDM",
-        "credits": 1,
-    },
-    {
-        "code": "CEPEL501X",
-        "name": "Program Elective-I Lab",
-        "category": "PEC",
-        "credits": 1,
-    },
-    {"code": "CEM501", "name": "Mini Project 2", "category": "Project", "credits": 1},
-]
+class Course(BaseModel):
+    code: str = Field(description="Course Code (e.g., CEC501)")
+    name: str = Field(description="Course Name")
+    category: str = Field(description="Category (e.g., PCC, PEC, MDM, Lab)")
+    credits: int = Field(description="Credits")
 
+class Curriculum(BaseModel):
+    courses: list[Course]
 
-def main() -> None:
-    reader = PdfReader(str(PDF_PATH))
+from openai import AsyncOpenAI
+from agents import OpenAIChatCompletionsModel
+
+extractor_agent = Agent(
+    "curriculum_extractor",
+    instructions="""You are an expert Data Engineer. Extract the course curriculum list from the university syllabus text provided below.
+Identify the main courses (PCC), Electives (PEC), Minors (MDM), and Labs.
+Cross-reference the modules to ensure you get all course names and codes correctly.""",
+    model=OpenAIChatCompletionsModel(
+        "",
+        openai_client=AsyncOpenAI(
+            api_key=os.getenv("LLM_API_KEY", "V7mQ2xL9pR4kT8nC"), 
+            base_url=os.getenv("LLM_BASE_URL", "https://llama.atharva-amrutkar.in/v1")
+        ),
+    ),
+    output_type=Curriculum
+)
+
+import asyncio
+
+async def extract_curriculum_via_llm(syllabus_text_sample: str) -> list:
+    """Uses Gemini via Agents library to dynamically extract the course nomenclature."""
+    try:
+        # Pass the first ~7k chars to ensure we don't blow out the local model's token limit (n_ctx=4096)
+        result = await Runner.run(extractor_agent, f"Syllabus Sample Text:\n\n{syllabus_text_sample[:7000]}")
+        curriculum = result.final_output_as(Curriculum)
+        return [course.model_dump() for course in curriculum.courses]
+    except Exception as e:
+        print(f"  [Warning] Gemini Extraction failed: {e}. Defaulting to empty list.")
+        return []
+
+async def process_pdf(pdf_path: Path):
+    output_filename = pdf_path.stem.lower().replace(" ", "_").replace("(", "").replace(")", "") + "_structured.json"
+    output_path = DATA_DIR / output_filename
+
+    print(f"Processing {pdf_path.name}...")
+    reader = PdfReader(str(pdf_path))
     pages = []
+    
+    # Extract text and check for images
+    first_pages_text = ""
     for page_number, page in enumerate(reader.pages, start=1):
         text = (page.extract_text() or "").strip()
+        
+        # Capture first 25 pages for LLM curriculum extraction
+        if page_number <= 25:
+            first_pages_text += text + "\n"
+            
         resources = page.get("/Resources") or {}
         xobjects = resources.get("/XObject") or {}
         has_image = any(
             reference.get_object().get("/Subtype") == "/Image"
             for reference in xobjects.values()
+            if hasattr(reference, "get_object")
         )
         extraction_status = (
             "text_extracted"
@@ -77,13 +92,16 @@ def main() -> None:
             }
         )
 
+    print("  Extracting curriculum metadata via Gemini...")
+    courses_list = await extract_curriculum_via_llm(first_pages_text)
+
     data = {
         "schema_version": 1,
         "document": {
-            "filename": PDF_PATH.name,
-            "source_url": SOURCE_URL,
+            "filename": pdf_path.name,
+            "source_url": f"https://siesgst.edu.in/images/{pdf_path.name}",
             "program": "Bachelor of Engineering",
-            "department": "Computer Engineering",
+            "department": "Unknown Department",
             "page_count": len(pages),
             "pages_needing_ocr": [
                 page["page_number"]
@@ -94,24 +112,30 @@ def main() -> None:
         "pages": pages,
         "curricula": [
             {
-                "year": "Third Year",
-                "semester": 5,
+                "year": "Unknown",
+                "semester": 0,
                 "academic_year": "2026-27",
-                "department": "Computer Engineering",
-                "source_page": 11,
-                "courses": SEMESTER_V_COURSES,
+                "department": "Unknown",
+                "source_page": 1,
+                "courses": courses_list,
             }
         ],
     }
 
-    OUTPUT_PATH.write_text(
+    output_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(
-        f"Wrote {len(pages)} pages and {len(SEMESTER_V_COURSES)} Semester V courses to {OUTPUT_PATH}"
-    )
+    print(f"  Saved {len(pages)} pages and {len(courses_list)} courses to {output_filename}")
 
+async def main() -> None:
+    pdf_files = glob.glob(str(DATA_DIR / "*.pdf"))
+    if not pdf_files:
+        print("No PDF files found in data directory.")
+        return
+        
+    for pdf_file in pdf_files:
+        await process_pdf(Path(pdf_file))
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -273,77 +273,66 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
     if intent == "syllabus":
         async def stream_syllabus():
             try:
-                yield sse("tool_call", name="search_syllabus")
+                yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
+                
                 from rag.rag_pipeline import ask_sies_gpt
-                result = await asyncio.to_thread(ask_sies_gpt, last_message)
-                yield sse("tool_output")
-                yield sse("token", text=result["answer"])
+                import queue
+                import threading
                 
-                # Group sources by filename so pages are grouped together
-                grouped_dict = {}
-                for s in result.get("sources", []):
-                    filename = s.get("filename")
-                    page = s.get("page")
-                    url = s.get("url") or f"https://siesgst.edu.in/images/{filename}"
-                    
-                    if filename not in grouped_dict:
-                        grouped_dict[filename] = {"url": url, "pages": []}
-                    
-                    if page not in grouped_dict[filename]["pages"]:
-                        grouped_dict[filename]["pages"].append(page)
+                q = queue.Queue()
                 
-                grouped_sources = []
-                for filename, data in grouped_dict.items():
-                    pages_str = ", ".join(str(p) for p in sorted(data["pages"]))
-                    title = f"{filename} (Pages {pages_str})" if len(data["pages"]) > 1 else f"{filename} (Page {pages_str})"
-                    grouped_sources.append({
-                        "url": data["url"],
-                        "title": title
-                    })
+                def run():
+                    try:
+                        ask_sies_gpt(last_message, yield_callback=q.put)
+                    except Exception as e:
+                        q.put(e)
+                    finally:
+                        q.put(None)
                 
-                if grouped_sources:
-                    yield sse("sources", sources=grouped_sources)
-                    
+                t = threading.Thread(target=run)
+                t.start()
+                
+                while True:
+                    item = await asyncio.to_thread(q.get)
+                    if item is None:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    if isinstance(item, dict):
+                        if item["type"] == "sources":
+                            yield sse("tool_output")
+                            
+                            grouped_dict = {}
+                            for s in item.get("sources", []):
+                                filename = s.get("filename")
+                                page = s.get("page")
+                                url = s.get("url") or f"https://siesgst.edu.in/images/{filename}"
+                                
+                                if filename not in grouped_dict:
+                                    grouped_dict[filename] = {"url": url, "pages": []}
+                                
+                                if page not in grouped_dict[filename]["pages"]:
+                                    grouped_dict[filename]["pages"].append(page)
+                            
+                            grouped_sources = []
+                            for filename, data in grouped_dict.items():
+                                pages_str = ", ".join(str(p) for p in sorted(data["pages"]))
+                                title = f"{filename} (Pages {pages_str})" if len(data["pages"]) > 1 else f"{filename} (Page {pages_str})"
+                                grouped_sources.append({
+                                    "url": data["url"],
+                                    "title": title
+                                })
+                            
+                            if grouped_sources:
+                                yield sse("sources", sources=grouped_sources)
+                        elif item["type"] == "token":
+                            yield sse("token", text=item["text"])
+                
                 yield sse("done")
             except Exception as e:
                 log.exception("Syllabus stream failed")
-                yield sse("error", message="Syllabus search failed.")
+                yield sse("error", text=str(e))
                 
-        return StreamingResponse(
-            stream_syllabus(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-        )
-    else:
-        app_agent, index = state.agent, state.index
-        if app_agent is None or index is None:
-            raise HTTPException(status_code=503, detail="Index not ready.")
-        return StreamingResponse(
-            stream_answer(app_agent, index, req.messages),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return StreamingResponse(stream_syllabus(), media_type="text/event-stream")
 
 
-@app.post("/api/refresh", status_code=202)
-async def refresh(x_admin_token: str | None = Header(default=None)) -> dict[str, str]:
-    expected = os.getenv("ADMIN_TOKEN")
-    if not expected:
-        raise HTTPException(
-            status_code=403, detail="Refresh is disabled (ADMIN_TOKEN not set)."
-        )
-    if not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid admin token.")
-    if state.building:
-        raise HTTPException(status_code=409, detail="A rebuild is already running.")
-    spawn(rebuild(refresh=True))
-    return {"status": "started"}
-
-
-class SIESChatRequest(BaseModel):
-    message: str
-
-
-@app.post("/chat")
-def sies_chat(request: SIESChatRequest):
-    return ask_sies_gpt(request.message)

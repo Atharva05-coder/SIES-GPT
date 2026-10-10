@@ -12,9 +12,7 @@ from rag.outline_formatter import (
 )
 from rag.vector_store import collection
 
-SYLLABUS_JSON = (
-    Path(__file__).resolve().parents[1] / "data" / "te_ce_r24_structured.json"
-)
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 COURSE_CODE = re.compile(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b")
 TOKEN = re.compile(r"[a-z0-9]+")
 OUTLINE_REQUEST = re.compile(
@@ -150,35 +148,46 @@ def _requested_semesters(question: str) -> list[int]:
 
 @lru_cache(maxsize=1)
 def _semester_structure_pages() -> tuple[dict, ...]:
-    try:
-        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
-            syllabus = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return ()
-
     pages = []
-    for page in syllabus.get("pages", []):
-        text = page.get("text", "")
-        page_num = page.get("page_number")
-        
-        semesters = [
-            _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(text)
-        ]
-        
-        if "Program Structure for" in text or page_num in [12, 14, 16]:
-            if page_num == 12: semesters.append(5)
-            elif page_num == 14: semesters.append(6)
-            elif page_num == 16: semesters.append(7)
+    for json_file in DATA_DIR.glob("*_structured.json"):
+        try:
+            with json_file.open("r", encoding="utf-8") as file:
+                syllabus = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        document = syllabus.get("document", {})
+        filename = document.get("filename", "Unknown PDF")
+        url = document.get("source_url", "")
+
+        for page in syllabus.get("pages", []):
+            text = page.get("text", "")
+            page_num = page.get("page_number")
             
-            if semesters:
-                pages.append({**page, "semesters": sorted(set(semesters))})
+            semesters = [
+                _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(text)
+            ]
+            
+            if "Program Structure for" in text or page_num in [12, 14, 16]:
+                if page_num == 12: semesters.append(5)
+                if page_num == 14: semesters.append(5)
+                if page_num == 16: semesters.append(6)
                 
+            if semesters:
+                pages.append({
+                    "page_number": page.get("page_number"),
+                    "text": text,
+                    "semesters": semesters,
+                    "filename": filename,
+                    "url": url,
+                })
+
     return tuple(pages)
 
 
 def _retrieve_semester_structures(question: str) -> list[dict] | None:
     if not re.search(
-        r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?|options?|mdms?|minors?|examination scheme|exam scheme|credits?|structure|list)\b",
+        r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?|options?|mdms?|minors?|examination scheme|exam scheme|credits?|structure|list|semester|sem)\b",
         question,
         re.IGNORECASE,
     ):
@@ -186,12 +195,6 @@ def _retrieve_semester_structures(question: str) -> list[dict] | None:
 
     requested = _requested_semesters(question)
     if not requested:
-        return None
-
-    try:
-        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
-            document = json.load(file)["document"]
-    except (OSError, json.JSONDecodeError, KeyError):
         return None
 
     matched_pages = [
@@ -206,11 +209,9 @@ def _retrieve_semester_structures(question: str) -> list[dict] | None:
         {
             "text": page["text"],
             "metadata": {
-                "filename": document.get("filename", "Unknown PDF"),
+                "filename": page["filename"],
+                "url": page["url"],
                 "page": page["page_number"],
-                "url": document.get("source_url", ""),
-                "semesters": sorted(set(page["semesters"]) & set(requested)),
-                "semester_outline": True,
             },
         }
         for page in matched_pages
@@ -219,90 +220,71 @@ def _retrieve_semester_structures(question: str) -> list[dict] | None:
 
 @lru_cache(maxsize=1)
 def _course_sections() -> tuple[dict, ...]:
-    try:
-        with SYLLABUS_JSON.open("r", encoding="utf-8") as file:
-            syllabus = json.load(file)
-            pages = syllabus["pages"]
-    except (OSError, json.JSONDecodeError, KeyError):
-        return ()
-    document = syllabus.get("document", {})
-
-    starts = []
-    for index, page in enumerate(pages):
-        text = page.get("text", "")
-        code = COURSE_CODE.search(text)
-        has_course_objectives = "Course Objectives" in text
-        has_lab_objectives = "Lab Objectives" in text
-        if code and (has_course_objectives or has_lab_objectives):
-            starts.append((index, code.group()))
-
-    sections = []
-    for section_index, (start, code) in enumerate(starts):
-        end = (
-            starts[section_index + 1][0]
-            if section_index + 1 < len(starts)
-            else len(pages)
-        )
-        section_pages = pages[start:end]
-        header_text = section_pages[0].get("text", "")
-        code_match = COURSE_CODE.search(header_text)
-        header = (
-            header_text[code_match.end() : code_match.end() + 120] if code_match else ""
-        )
-        module_pages = [
-            page
-            for page in section_pages
-            if re.search(r"(?m)^\s*[1-6]\.0\b", page.get("text", ""))
-            and re.search(r"(?i)self.?learning", page.get("text", ""))
-        ]
-        module_outlines = extract_module_outlines(section_pages)
-        lab_pages = []
-        in_lab_content = False
-        for page in section_pages:
-            text = page.get("text", "")
-            stop = re.search(
-                r"(?im)^\s*(Course Assessment:|End Semester Examination:)",
-                text,
-            )
-            if stop:
-                text = text[: stop.start()]
-            if text.strip():
-                lab_pages.append({**page, "text": text.strip()})
-            if stop:
-                break
-            if "Lab Objective" in text or "Suggested List of Experiments" in text:
-                in_lab_content = True
-            elif (
-                in_lab_content
-                and "Lab Outcomes" not in text
-                and not re.search(
-                    r"(?i)\b(?:LO\d|Sr\.?\s*No\.?|Title of Experiments)\b", text
-                )
-                and not re.search(r"(?im)^\s*(Textbooks:|Reference books:|Online References:)", text)
-            ):
-                break
-
-        has_lab_content = any(
-            "Lab Objectives" in page.get("text", "")
-            or "Suggested List of Experiments" in page.get("text", "")
-            for page in section_pages
-        )
-        content_pages = section_pages
-        sections.append(
-            {
+    all_sections = []
+    for json_file in DATA_DIR.glob("*_structured.json"):
+        try:
+            with json_file.open("r", encoding="utf-8") as file:
+                syllabus = json.load(file)
+                pages = syllabus.get("pages", [])
+        except (OSError, json.JSONDecodeError, KeyError):
+            continue
+        document = syllabus.get("document", {})
+        
+        starts = []
+        for index, page in enumerate(pages):
+            ptext = page.get("text", "")
+            code = COURSE_CODE.search(ptext)
+            has_course_objectives = "Course Objective" in ptext or "Course Outcome" in ptext
+            has_lab_objectives = "Lab Objective" in ptext or "Lab Outcome" in ptext or "Suggested List of Experiments" in ptext
+            if code and (has_course_objectives or has_lab_objectives):
+                starts.append((index, code.group()))
+                
+        for section_index, (start, code) in enumerate(starts):
+            end = starts[section_index + 1][0] if section_index + 1 < len(starts) else len(pages)
+            section_pages = pages[start:end]
+            if not section_pages:
+                continue
+            header_text = section_pages[0].get("text", "")
+            code_match = COURSE_CODE.search(header_text)
+            header = header_text[code_match.end() : code_match.end() + 120] if code_match else ""
+            
+            module_pages = [
+                p for p in section_pages
+                if re.search(r"(?m)^\s*[1-6]\.0", p.get("text", "")) and re.search(r"(?i)self.?learning", p.get("text", ""))
+            ]
+            module_outlines = extract_module_outlines(section_pages)
+            lab_pages = []
+            in_lab_content = False
+            for p in section_pages:
+                t = p.get("text", "")
+                stop = re.search(r"(?im)^\s*(Course Assessment:|End Semester Examination:)", t)
+                if stop:
+                    t = t[: stop.start()]
+                if t.strip():
+                    lab_pages.append({**p, "text": t.strip()})
+                if stop:
+                    break
+                if "Lab Objective" in t or "Suggested List of Experiments" in t:
+                    in_lab_content = True
+                elif in_lab_content and "Lab Outcomes" not in t and not re.search(r"(?i)(?:LO\d|Sr\.?\s*No\.?|Title of Experiments)", t) and not re.search(r"(?im)^\s*(Textbooks:|Reference books:|Online References:)", t):
+                    pass
+            content_pages = module_pages if module_pages else ([section_pages[0]] if len(section_pages) == 1 else section_pages[:2])
+            has_lab_content = any(LAB_REQUEST.search(p.get("text", "")) for p in section_pages)
+            
+            all_sections.append({
                 "code": code,
                 "header": header,
-                "text": "\n".join(page.get("text", "") for page in section_pages),
+                "text": "\n\n".join(p.get("text", "") for p in section_pages),
                 "pages": content_pages,
+                "all_pages": section_pages,
                 "overview_page": section_pages[0],
                 "module_pages": module_pages,
                 "module_outlines": module_outlines,
                 "lab_pages": lab_pages if has_lab_content else [],
                 "filename": document.get("filename", "Unknown PDF"),
                 "url": document.get("source_url", ""),
-            }
-        )
-    return tuple(sections)
+            })
+    return tuple(all_sections)
 
 
 def _bm25_scores(query: str, documents: list[str]) -> list[float]:
@@ -332,7 +314,7 @@ def _bm25_scores(query: str, documents: list[str]) -> list[float]:
                 + (len(documents) - document_frequency[term] + 0.5)
                 / (document_frequency[term] + 0.5)
             )
-            length_factor = 1.2 * (0.25 + 0.75 * len(tokens) / average_length)
+            length_factor = 1.2 * (0.3 + 0.7 * len(tokens) / average_length)
             score += (
                 inverse_frequency
                 * term_frequency
@@ -353,6 +335,7 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
     code_match = COURSE_CODE.search(question.upper())
     is_outline_request = bool(OUTLINE_REQUEST.search(question))
     is_lab_request = bool(LAB_REQUEST.search(question))
+    is_books_request = bool(re.search(r"\b(references?|textbooks?|books?|online references?|online resources?|software tools?|hardware tools?|tools?|assignments?|useful links?|web resources?|bibliography)\b", question, re.IGNORECASE))
     generic_title_terms = {
         "engineer",
         "engineering",
@@ -367,8 +350,8 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
     for section, score in zip(sections, scores):
         if code_match and section["code"] != code_match.group():
             continue
-        if is_outline_request and not is_lab_request and section["lab_pages"]:
-            continue
+        # if is_outline_request and not is_lab_request and section["lab_pages"]:
+        #     continue
 
         title_tokens = set(_tokenize(section["header"]))
         title_overlap = query_tokens & title_tokens
@@ -402,6 +385,11 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         score += len(module_overlap) * 1.5
         if code_match:
             score += 100.0
+        
+        distinguishing_words = {"advanced", "advance", "intro", "introduction", "basics", "basic", "applied", "application", "fundamentals", "principles", "design"}
+        extra_distinguishing = (title_tokens & distinguishing_words) - query_tokens
+        if extra_distinguishing:
+            score -= 5.0
             
         if not is_lab_request and not re.search(r"\blab\b", section["header"], re.IGNORECASE):
             score += 5.0
@@ -447,6 +435,8 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         ]
     elif is_outline_request and is_strict_module_request and best_section["module_pages"]:
         selected_pages = best_section["module_pages"]
+    elif is_books_request and "all_pages" in best_section:
+        selected_pages = best_section["all_pages"]
     else:
         selected_pages = best_section["pages"]
 
@@ -500,7 +490,7 @@ def retrieve_relevant_chunks(question: str, top_k: int = 10):
     if not collection_size:
         return []
 
-    candidate_count = min(collection_size, max(top_k * 5, 40))
+    candidate_count = min(collection_size, 3000)
     query_embedding = create_embedding(question)
     results = collection.query(
         query_embeddings=[query_embedding],
@@ -537,18 +527,20 @@ def retrieve_relevant_chunks(question: str, top_k: int = 10):
             or (index < len(distances) and distances[index] <= 0.85)
         ),
         key=lambda index: (
-            1 / (60 + dense_ranks[index])
-            + (1 / (60 + lexical_ranks[index]) if index in lexical_ranks else 0),
+            max(
+                1 / (60 + dense_ranks[index]),
+                1 / (60 + lexical_ranks[index]) if index in lexical_ranks else 0
+            ),
             lexical_scores[index],
         ),
         reverse=True,
     )
     file_scores = Counter()
-    for rank, index in enumerate(ranked_indices[: max(top_k, 3)], start=1):
+    for rank, index in enumerate(ranked_indices[: max(top_k, 3)]):
         metadata = metadatas[index] or {}
         filename = metadata.get("filename")
         if filename:
-            file_scores[filename] += 1 / (60 + rank)
+            file_scores[filename] += 1.0 / (2 ** rank)
     if file_scores:
         best_filename = file_scores.most_common(1)[0][0]
         ranked_indices = [
@@ -563,9 +555,9 @@ def retrieve_relevant_chunks(question: str, top_k: int = 10):
     ]
     
     final_results = list(forced_results)
-    seen = { (r["metadata"].get("page"), r["metadata"].get("filename")) for r in final_results }
+    seen = { (r["metadata"].get("page"), r["metadata"].get("filename"), r["text"]) for r in final_results }
     for r in dense_results:
-        key = (r["metadata"].get("page"), r["metadata"].get("filename"))
+        key = (r["metadata"].get("page"), r["metadata"].get("filename"), r["text"])
         if key not in seen:
             seen.add(key)
             final_results.append(r)

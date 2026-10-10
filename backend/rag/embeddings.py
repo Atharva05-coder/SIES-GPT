@@ -10,7 +10,9 @@ EMBEDDING_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 
 client = OpenAI(
     base_url=os.environ.get("EMBED_BASE_URL", "https://embed.atharva-amrutkar.in/v1"),
-    api_key=os.environ.get("EMBED_API_KEY", "")
+    api_key=os.environ.get("EMBED_API_KEY", ""),
+    max_retries=0,
+    timeout=300.0
 )
 
 def create_embedding(text: str):

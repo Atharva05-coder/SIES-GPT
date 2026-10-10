@@ -1,10 +1,10 @@
 import re
 
 MODULE_HEADING = re.compile(r"^\s*([1-6])\.0\s+(?:\1\s+)?(.+?)\s+(\d{1,2})\s*$")
-MODULE_START = re.compile(r"^\s*([1-6])\.0\s+(.*)$")
-UNIT_HEADING = re.compile(r"^\s*([1-6])\.(\d+)\b\s*(.*)$")
+MODULE_START = re.compile(r"^\s*([1-6])\.0\s+(?!\d+\.\d+)(.*)$")
+UNIT_HEADING = re.compile(r"^\s*(?:[1-6]\.0\s+)?([1-6])\.(\d+)\b\s*(.*)$")
 REFERENCE_HEADING = re.compile(
-    r"^(Textbooks:|Reference books:|Online References:|Course Assessment:|End Semester Examination:)",
+    r"^(Textbooks:|Reference books:|Online References:|Course Assessment:|End Semester Examination:|Course Objective[s]?:|Course Outcome[s]?:|Lab Objective[s]?:|Lab Outcome[s]?:)",
     re.IGNORECASE,
 )
 SELF_LEARNING_HEADING = re.compile(
@@ -50,7 +50,7 @@ def select_requested_modules(question: str, modules: list[dict]) -> list[dict]:
 
     normalized_question = question.casefold()
     count_match = re.search(
-        rf"\b(?:first|initial|top)\s+({NUMBER_TOKEN})\s+modules?\b",
+        rf"\b(?:first|initial|top)\s+({NUMBER_TOKEN})(?:\s+modules?)?\b",
         normalized_question,
     )
     if count_match:
@@ -58,7 +58,7 @@ def select_requested_modules(question: str, modules: list[dict]) -> list[dict]:
         return available[:count]
 
     last_match = re.search(
-        rf"\b(?:last|final)\s+({NUMBER_TOKEN})\s+modules?\b",
+        rf"\b(?:last|final)\s+({NUMBER_TOKEN})(?:\s+modules?)?\b",
         normalized_question,
     )
     if last_match:
@@ -66,7 +66,7 @@ def select_requested_modules(question: str, modules: list[dict]) -> list[dict]:
         return available[-count:]
 
     between_match = re.search(
-        rf"\bbetween\s+({NUMBER_TOKEN})\s+and\s+({NUMBER_TOKEN})\s+modules?\b",
+        rf"\b(?:modules?\s+)?between\s+({NUMBER_TOKEN})\s+and\s+({NUMBER_TOKEN})(?:\s+modules?)?\b",
         normalized_question,
     )
     if between_match:
@@ -86,13 +86,13 @@ def select_requested_modules(question: str, modules: list[dict]) -> list[dict]:
         return [module for module in available if low <= module["number"] <= high]
 
     list_match = re.search(
-        rf"\bmodules?\s+({NUMBER_TOKEN}(?:\s*(?:,|and|&)\s*{NUMBER_TOKEN})+)\b",
+        rf"\b(?:modules?\s+({NUMBER_TOKEN}(?:\s*(?:,|and|&)\s*{NUMBER_TOKEN})+)|({NUMBER_TOKEN}(?:\s*(?:,|and|&)\s*{NUMBER_TOKEN})+)\s+modules?)\b",
         normalized_question,
     )
     if list_match:
         requested = {
             _number_value(token)
-            for token in re.findall(NUMBER_TOKEN, list_match.group(1))
+            for token in re.findall(NUMBER_TOKEN, list_match.group(1) or list_match.group(2))
         }
         return [module for module in available if module["number"] in requested]
 
@@ -121,10 +121,11 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
             "title": title.strip(),
             "hours": hours,
             "pages": [page_number],
+            "description": "",
             "units": [],
             "self_learning": [],
         }
-        current_content = None
+        current_content = ("description",)
         skip_references = False
 
     for page in pages:
@@ -247,21 +248,28 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                 continue
 
             if current_content:
-                content = module[current_content[0]][current_content[1]]
-                if isinstance(content, dict):
-                    content["text"] = " ".join(
-                        part for part in (content["text"], line) if part
+                if len(current_content) == 1:
+                    module[current_content[0]] = " ".join(
+                        part for part in (module[current_content[0]], line) if part
                     )
                 else:
-                    module[current_content[0]][current_content[1]] = " ".join(
-                        part for part in (content, line) if part
-                    )
+                    content = module[current_content[0]][current_content[1]]
+                    if isinstance(content, dict):
+                        content["text"] = " ".join(
+                            part for part in (content["text"], line) if part
+                        )
+                    else:
+                        module[current_content[0]][current_content[1]] = " ".join(
+                            part for part in (content, line) if part
+                        )
 
     outlines = []
     for module_number, module in sorted(modules.items()):
         lines = [
             f"## Module {module_number}: {module['title']} ({module['hours']} hours)"
         ]
+        if module["description"]:
+            lines.append(module["description"])
         lines.extend(
             f"**Unit {unit['number']}**\n{unit['text']}" for unit in module["units"]
         )

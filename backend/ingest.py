@@ -1,11 +1,13 @@
 import json
 import glob
+from pathlib import Path
 from rag.chunker import chunk_syllabus_pages
 from rag.embeddings import create_embedding
 from rag.vector_store import collection
 
 def main() -> None:
-    json_files = glob.glob("backend/data/*_structured.json")
+    data_dir = Path(__file__).resolve().parent / "data"
+    json_files = glob.glob(str(data_dir / "*_structured.json"))
     stored_chunks = 0
     skipped_documents = 0
     failed_documents = 0
