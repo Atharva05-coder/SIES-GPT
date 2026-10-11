@@ -16,7 +16,7 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 COURSE_CODE = re.compile(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b")
 TOKEN = re.compile(r"[a-z0-9]+")
 OUTLINE_REQUEST = re.compile(
-    r"\b(syllabus|curriculum|modules?|topics?|units?|chapters?|sections?|self.?learning|course content|course outline|labs?|practicals?|experiments?|tasks?|assignments?|outcomes?|objectives?|goals?|aims?|purpose|books?|textbooks?|references?|bibliography|reading|materials?|prerequisites?|pre-requisites?|requirements?|background|marks?|grading|assessments?|evaluations?|examinations?|exam scheme|scheme)\b",
+    r"\b(syllabus|curriculum|modules?|topics?|units?|chapters?|sections?|self.?learning|course content|course outline|labs?|practicals?|experiments?|tasks?|assignments?|outcomes?|objectives?|goals?|aims?|purpose|books?|textbooks?|references?|bibliography|reading|materials?|prerequisites?|pre-requisites?|requirements?|background|marks?|grading|graded|grades?|evaluat\w*|assess\w*|exam\w*|scheme)\b",
     re.IGNORECASE,
 )
 LAB_REQUEST = re.compile(r"\b(labs?|practicals?|experiments?)\b", re.IGNORECASE)
@@ -268,7 +268,7 @@ def _course_sections() -> tuple[dict, ...]:
                     in_lab_content = True
                 elif in_lab_content and "Lab Outcomes" not in t and not re.search(r"(?i)(?:LO\d|Sr\.?\s*No\.?|Title of Experiments)", t) and not re.search(r"(?im)^\s*(Textbooks:|Reference books:|Online References:)", t):
                     pass
-            content_pages = module_pages if module_pages else ([section_pages[0]] if len(section_pages) == 1 else section_pages[:2])
+            content_pages = module_pages if module_pages else section_pages
             has_lab_content = any(LAB_REQUEST.search(p.get("text", "")) for p in section_pages)
             
             all_sections.append({
@@ -336,6 +336,7 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
     is_outline_request = bool(OUTLINE_REQUEST.search(question))
     is_lab_request = bool(LAB_REQUEST.search(question))
     is_books_request = bool(re.search(r"\b(references?|textbooks?|books?|online references?|online resources?|software tools?|hardware tools?|tools?|assignments?|useful links?|web resources?|bibliography)\b", question, re.IGNORECASE))
+    is_assessment_request = bool(re.search(r"\b(evaluat\w*|assess\w*|exam\w*|scheme|marks?|grading|graded|grades?|weightage|ciap|esep?|ise|mse|term\s*work|passing criteria|criteria)\b", question, re.IGNORECASE))
     generic_title_terms = {
         "engineer",
         "engineering",
@@ -412,7 +413,11 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
 
     is_strict_module_request = bool(re.search(r"\b(syllabus|curriculum|modules?|topics?|self.?learning|course content|course outline)\b", question, re.IGNORECASE))
     
-    if is_outline_request and is_lab_request and best_section["lab_pages"]:
+    if is_books_request and "all_pages" in best_section:
+        selected_pages = best_section["all_pages"]
+    elif is_assessment_request and "all_pages" in best_section:
+        selected_pages = best_section["all_pages"]
+    elif is_outline_request and is_lab_request and best_section["lab_pages"]:
         selected_pages = best_section["lab_pages"]
     elif is_outline_request and is_strict_module_request and best_section["module_outlines"]:
         selected_modules = select_requested_modules(
@@ -435,8 +440,6 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         ]
     elif is_outline_request and is_strict_module_request and best_section["module_pages"]:
         selected_pages = best_section["module_pages"]
-    elif is_books_request and "all_pages" in best_section:
-        selected_pages = best_section["all_pages"]
     else:
         selected_pages = best_section["pages"]
 
