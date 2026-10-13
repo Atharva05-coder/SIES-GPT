@@ -133,7 +133,7 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
     block = sec_match.group(2)
 
     lines = [l.strip() for l in block.split("\n") if l.strip()]
-    code_pattern = re.compile(r"^((?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CEP)\d+[A-Z0-9/]*)\b")
+    code_pattern = re.compile(r"^((?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CEP|CEM)\d+[A-Z0-9/]*)\b")
     
     table_rows = []
     current_code = None
@@ -166,11 +166,19 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
     formatted_rows = []
 
     for code, rest in table_rows:
-        cat_match = re.search(r"\b(PCC|BSC|ESC|MDM|PEC|VSEC|AEC|HSSM|MJP|OE|PW)\b\s+(.*)$", rest)
-        if cat_match:
-            name = rest[:cat_match.start()].strip()
-            cat = cat_match.group(1)
-            nums = cat_match.group(2).strip().split()
+        rest = re.sub(r"\s+", " ", rest).strip()
+        nums_match = re.search(r"((?:(?:\d+[\*\+\#\&\$]*|--|-)\s*){3,})$", rest)
+        if nums_match:
+            scheme_raw = nums_match.group(1).strip()
+            before_nums = rest[:nums_match.start()].strip()
+            cat_match = re.search(r"\b(PCC|BSC|ESC|MDM|PEC|VSEC|AEC|HSSM|MJP|OE|PW|CEP|VEC)(?:\s*\([A-Z0-9-]+\))?$", before_nums)
+            if cat_match:
+                cat = cat_match.group(0).strip()
+                name = before_nums[:cat_match.start()].strip()
+            else:
+                cat = "--"
+                name = before_nums
+            nums = scheme_raw.split()
             if len(nums) >= 7:
                 th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
                 tot_c = nums[-1]
@@ -180,13 +188,30 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
                 scheme = f"Contact Hours: {' '.join(nums[:-1])}"
                 credits = nums[-1]
             else:
-                scheme = " ".join(nums)
+                scheme = scheme_raw
                 credits = nums[-1] if nums else "--"
         else:
-            name = rest
-            cat = "--"
-            scheme = "--"
-            credits = "--"
+            cat_match = re.search(r"\b(PCC|BSC|ESC|MDM|PEC|VSEC|AEC|HSSM|MJP|OE|PW|CEP|VEC)\b\s+(.*)$", rest)
+            if cat_match:
+                name = rest[:cat_match.start()].strip()
+                cat = cat_match.group(1)
+                nums = cat_match.group(2).strip().split()
+                if len(nums) >= 7:
+                    th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
+                    tot_c = nums[-1]
+                    scheme = f"Theory: {th_h}, Pract.: {pr_h}, Tut.: {tu_h}"
+                    credits = tot_c
+                elif len(nums) >= 4:
+                    scheme = f"Contact Hours: {' '.join(nums[:-1])}"
+                    credits = nums[-1]
+                else:
+                    scheme = " ".join(nums)
+                    credits = nums[-1] if nums else "--"
+            else:
+                name = rest
+                cat = "--"
+                scheme = "--"
+                credits = "--"
 
         name = re.sub(r"\s+", " ", name).strip()
         formatted_rows.append(f"| {code} | {name} | {cat} | {scheme} | {credits} |")
@@ -230,7 +255,9 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
 
     def early_return(ret_text):
         if yield_callback:
-            yield_callback({"type": "token", "text": ret_text})
+            tokens = re.findall(r"\S+|\n|\s+", ret_text)
+            for tok in tokens:
+                yield_callback({"type": "token", "text": tok})
         return ret_text
 
     check_query = original_question if original_question else question
@@ -260,8 +287,8 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                 yield_callback({"type": "token", "text": tok})
         return fast_books
 
-    if "credit distribution" in check_query.lower() and "semester" in check_query.lower():
-        return """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
+    if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
+        table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
 
 | Course Category | I | II | III | IV | V | VI | VII | VIII | Total |
 |---|---|---|---|---|---|---|---|---|---|
@@ -282,6 +309,11 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
 | Internship / On Job Training (OJT) | - | - | - | - | - | - | 12 | - | 12 |
 | Co-curricular Courses (CC) | 04 | - | - | - | - | - | - | - | 04 |
 | **Total Credits (Major)** | **21** | **21** | **22** | **21** | **22** | **22** | **20** | **19** | **168** |"""
+        return early_return(table_text)
+
+    if re.search(r"\b(total credits?|total number of credits?|credits? for (?:the )?(?:b\.?tech|degree|program|engineering))\b", check_query, re.IGNORECASE):
+        total_text = "According to the syllabus documents (Page 3), the total number of credits required for the B.Tech Computer Engineering program is **168 credits** across all 8 semesters (Sem I: 21, Sem II: 21, Sem III: 22, Sem IV: 21, Sem V: 22, Sem VI: 22, Sem VII: 20, Sem VIII: 19)."
+        return early_return(total_text)
     context_parts = []
     expected_modules = []
     expected_units = []
@@ -570,31 +602,41 @@ ANSWER:
         base_url=os.environ.get("LLM_BASE_URL", "https://llama.atharva-amrutkar.in/v1"),
         api_key=os.environ.get("LLM_API_KEY", "V7mQ2xL9pR4kT8nC")
     )
+    system_instruction = (
+        "You are SIES GPT, an AI assistant for SIES Graduate School of Technology. "
+        "Answer directly, factually, and concisely based strictly on the provided context. "
+        "Do not use internal reasoning or thinking steps. Do not include URLs or source citations in your answer body."
+    )
+    llm_messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": prompt},
+    ]
     if yield_callback:
         response = client.chat.completions.create(
             model="llama3.2:3b",
-            messages=[{"role": "user", "content": prompt}],
+            messages=llm_messages,
             temperature=0.0,
-            max_tokens=450,
+            max_tokens=1000,
             stream=True,
             extra_body={"options": {"num_ctx": 8192}}
         )
         answer_chunks = []
         for chunk in response:
-            if chunk.choices[0].delta.content:
+            if chunk.choices and chunk.choices[0].delta:
                 text = chunk.choices[0].delta.content
-                answer_chunks.append(text)
-                yield_callback({"type": "token", "text": text})
+                if text:
+                    answer_chunks.append(text)
+                    yield_callback({"type": "token", "text": text})
         answer = "".join(answer_chunks)
     else:
         response = client.chat.completions.create(
             model="llama3.2:3b",
-            messages=[{"role": "user", "content": prompt}],
+            messages=llm_messages,
             temperature=0.0,
-            max_tokens=450,
+            max_tokens=1000,
             extra_body={"options": {"num_ctx": 8192}}
         )
-        answer = response.choices[0].message.content
+        answer = response.choices[0].message.content or ""
 
     if expected_modules:
         returned_modules = [

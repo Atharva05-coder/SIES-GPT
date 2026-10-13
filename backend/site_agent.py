@@ -47,7 +47,7 @@ from agents import (
 from openai import AsyncOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 set_tracing_disabled(True)
 
 
@@ -62,7 +62,7 @@ MAX_PAGES = 250
 MAX_DEPTH = 3
 REQUEST_DELAY = 0.3
 
-CACHE_FILE = Path("data/site_cache.json")
+CACHE_FILE = Path(__file__).resolve().parent / "data" / "site_cache.json"
 CACHE_MAX_AGE_DAYS = 7
 PARSER_VERSION = 2
 
@@ -73,8 +73,8 @@ TOP_K = 6
 META_BOOST = 1.0
 READ_PAGE_CHARS = 6000
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-LLM_API_KEY = os.getenv("LLM_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://llama.atharva-amrutkar.in/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "V7mQ2xL9pR4kT8nC")
 LLM_MODEL = "local"
 
 MAX_TURNS = 10

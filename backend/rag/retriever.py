@@ -189,7 +189,43 @@ def _semester_structure_pages() -> tuple[dict, ...]:
     return tuple(pages)
 
 
+@lru_cache(maxsize=1)
+def _credit_distribution_pages() -> tuple[dict, ...]:
+    pages = []
+    for json_file in DATA_DIR.glob("*_structured.json"):
+        try:
+            with json_file.open("r", encoding="utf-8") as file:
+                syllabus = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        document = syllabus.get("document", {})
+        filename = document.get("filename", "Unknown PDF")
+        url = document.get("source_url", "")
+
+        for page in syllabus.get("pages", []):
+            if page.get("page_number") == 3:
+                pages.append({
+                    "text": page.get("text", ""),
+                    "metadata": {
+                        "filename": filename,
+                        "url": url,
+                        "page": 3,
+                    },
+                })
+    return tuple(pages)
+
+
 def _retrieve_semester_structures(question: str) -> list[dict] | None:
+    if re.search(
+        r"\b(credit distribution|credits? distribution|total credits?|degree credits?|credits? for (?:the )?(?:b\.?tech|degree|program|engineering))\b",
+        question,
+        re.IGNORECASE,
+    ):
+        dist_pages = _credit_distribution_pages()
+        if dist_pages:
+            return list(dist_pages)
+
     if not re.search(
         r"\b(syllabus|subjects?|courses?|curriculum|program structure|electives?|options?|mdms?|minors?|examination scheme|exam scheme|credits?|structure|list|semester|sem)\b",
         question,
@@ -240,7 +276,8 @@ def _course_sections() -> tuple[dict, ...]:
             code = COURSE_CODE.search(ptext)
             has_course_objectives = "Course Objective" in ptext or "Course Outcome" in ptext
             has_lab_objectives = "Lab Objective" in ptext or "Lab Outcome" in ptext or "Suggested List of Experiments" in ptext
-            if code and (has_course_objectives or has_lab_objectives):
+            has_project = "Program Outcomes addressed" in ptext or ("Guidelines for" in ptext and "Project" in ptext)
+            if code and (has_course_objectives or has_lab_objectives or has_project):
                 starts.append((index, code.group()))
                 
         for section_index, (start, code) in enumerate(starts):
@@ -479,7 +516,11 @@ def retrieve_relevant_chunks(question: str, top_k: int = 10):
         and not LAB_REQUEST.search(question)
     )
     
-    if is_semester_catalog or is_broad_semester_range:
+    is_credit_query = bool(
+        re.search(r"\b(credit distribution|credits? distribution|total credits?|degree credits?|credits? for (?:the )?(?:b\.?tech|degree|program|engineering))\b", question, re.IGNORECASE)
+    )
+
+    if is_semester_catalog or is_broad_semester_range or is_credit_query:
         semester_results = _retrieve_semester_structures(question)
         if semester_results:
             return semester_results

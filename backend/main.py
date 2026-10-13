@@ -263,7 +263,7 @@ FAST_SYLLABUS_RE = re.compile(
 )
 
 FAST_WEBSITE_RE = re.compile(
-    r"\b(faculty|teacher|prof|professor|hod|principal|dean|admissions?|fees?|placements?|"
+    r"\b(who\s+is|who\s+was|who\s+are|dr\.?|ms\.?|mr\.?|prof\.?|faculty|teacher|prof|professor|hod|principal|dean|admissions?|fees?|placements?|"
     r"packages?|highest package|average package|companies|recruiters|campus|canteen|library|"
     r"hostel|events?|fest|rotaract|student council|contact|address|location|reach|bus|train|"
     r"railway|concession|documents? required|eligibility criteria)\b",
