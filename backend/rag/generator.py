@@ -4,6 +4,67 @@ from openai import OpenAI
 import os
 
 
+def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
+    if not re.search(r"\b(electives?|elective options?)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(experiments?|labs?|practicals?|modules?|examination scheme|exam scheme|evaluation|assessment)\b", query, re.IGNORECASE):
+        return None
+
+    m = re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8]|I|II|III|IV|V|VI|VII|VIII)\b", query, re.IGNORECASE)
+    sem_num = None
+    if m:
+        val = m.group(1).upper()
+        roman = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8}
+        sem_num = roman.get(val, int(val) if val.isdigit() else None)
+
+    for item in retrieved_chunks:
+        text = item.get("text", "")
+        clean_text = text.replace(
+            "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC5011: \nAdvanced Database \nManagement System \nCEPEC5012: \nInternet of things \nCEPEC5013:  \nEthical Hacking \n \nCEPEC5014: \nData warehouse \nand Mining",
+            "General: CEPEC5011: Advanced Database Management System\nSmart Systems: CEPEC5012: Internet of things\nNetwork and Security: CEPEC5013: Ethical Hacking\nArtificial Intelligence: CEPEC5014: Data warehouse and Mining"
+        ).replace(
+            "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC6011: \nMachine Vision \nCEPEC6012:   \nRobotics and \nApplications \n \nCEPEC6013: Digital \nForensics \nCEPEC6014: \nNatural Language \nProcessing",
+            "General: CEPEC6011: Machine Vision\nSmart Systems: CEPEC6012: Robotics and Applications\nNetwork and Security: CEPEC6013: Digital Forensics\nArtificial Intelligence: CEPEC6014: Natural Language Processing"
+        ).replace(
+            "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC7011:  High \nPerformance \nComputing \n \nCEPEC7012: \nFog and Edge \nComputing \nCEPEC7013: \nBlockchain \nTechnology \nCEPEC7014: \nDeep Learning",
+            "General: CEPEC7011: High Performance Computing\nSmart Systems: CEPEC7012: Fog and Edge Computing\nNetwork and Security: CEPEC7013: Blockchain Technology\nArtificial Intelligence: CEPEC7014: Deep Learning"
+        ).replace(
+            "Data Science Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC7021: \nAugmented Reality \nand Virtual Reality \nCEPEC7022: \nQuantum \nComputing \nCEPEC7023: \nIntelligent Forensic \n \nCEPEC7024: \nReinforcement \nLearning",
+            "Data Science: CEPEC7021: Augmented Reality and Virtual Reality\nSmart Systems: CEPEC7022: Quantum Computing\nNetwork and Security: CEPEC7023: Intelligent Forensic\nArtificial Intelligence: CEPEC7024: Reinforcement Learning"
+        )
+
+        sections = re.split(r"(?i)(Program Elective\s*[-–—]?\s*(?:[I|V|X]+|\d+))", clean_text)
+        if len(sections) < 3:
+            continue
+
+        results = []
+        category_names = []
+        for i in range(1, len(sections), 2):
+            raw_header = sections[i].strip()
+            header = re.sub(r"Program\s+Elective\s*[-–—]?\s*", "Program Elective - ", raw_header, flags=re.IGNORECASE).strip()
+            category_names.append(header)
+            body = sections[i+1]
+            lines = []
+            for line in body.split("\n"):
+                line = line.strip()
+                if re.search(r"\b(Multidisciplinary Minor|Open Elective)\b", line, re.IGNORECASE):
+                    break
+                m_match = re.match(r"^([^:]+):\s*(CEPEC\d+):\s*(.+)$", line)
+                if m_match:
+                    bucket, code, name = m_match.group(1).strip(), m_match.group(2).strip(), m_match.group(3).strip()
+                    lines.append(f"- **{bucket}**: {code}: {name}")
+            if lines:
+                results.append(f"### {header}\n" + "\n".join(lines))
+
+        if results:
+            roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
+            sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
+            intro = f"{sem_str} offers **{'** and **'.join(category_names)}**. Below are the available elective options:\n\n"
+            return intro + "\n\n".join(results)
+
+    return None
+
+
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
 
     def early_return(ret_text):
@@ -12,6 +73,14 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
         return ret_text
 
     check_query = original_question if original_question else question
+
+    fast_electives = extract_semester_electives(check_query, retrieved_chunks)
+    if fast_electives:
+        if yield_callback:
+            tokens = re.findall(r"\S+|\n|\s+", fast_electives)
+            for tok in tokens:
+                yield_callback({"type": "token", "text": tok})
+        return fast_electives
 
     if "credit distribution" in check_query.lower() and "semester" in check_query.lower():
         return """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
@@ -44,11 +113,22 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     last_exp_num = 0
 
     global_hints = []
+    seen_context_signatures = set()
     
     for item in retrieved_chunks:
         metadata = item["metadata"]
         pages = metadata.get("pages", [metadata.get("page")])
         text = item["text"]
+        if metadata.get("page") == 12:
+            text = text.replace(
+                "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC5011: \nAdvanced Database \nManagement System \nCEPEC5012: \nInternet of things \nCEPEC5013:  \nEthical Hacking \n \nCEPEC5014: \nData warehouse \nand Mining",
+                "General: CEPEC5011: Advanced Database Management System\nSmart Systems: CEPEC5012: Internet of things\nNetwork and Security: CEPEC5013: Ethical Hacking\nArtificial Intelligence: CEPEC5014: Data warehouse and Mining"
+            )
+        if metadata.get("page") == 14:
+            text = text.replace(
+                "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC6011: \nMachine Vision \nCEPEC6012:   \nRobotics and \nApplications \n \nCEPEC6013: Digital \nForensics \nCEPEC6014: \nNatural Language \nProcessing",
+                "General: CEPEC6011: Machine Vision\nSmart Systems: CEPEC6012: Robotics and Applications\nNetwork and Security: CEPEC6013: Digital Forensics\nArtificial Intelligence: CEPEC6014: Natural Language Processing"
+            )
         if metadata.get("page") == 16:
             text = text.replace(
                 "General Smart Systems Network and \nSecurity \nArtificial \nIntelligence \nCEPEC7011:  High \nPerformance \nComputing \n \nCEPEC7012: \nFog and Edge \nComputing \nCEPEC7013: \nBlockchain \nTechnology \nCEPEC7014: \nDeep Learning",
@@ -126,6 +206,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                         all_experiments[current_num]["full"].append(line)
 
         course_info = f"<course>{metadata.get('course_name', 'Unknown')}</course>\n" if 'course_name' in metadata else ""
+        text_sig = re.sub(r"\s+", " ", text.strip())[:250]
+        if text_sig in seen_context_signatures:
+            continue
+        seen_context_signatures.add(text_sig)
         context_parts.append(
             f"<source_document>\n"
             f"<filename>{metadata.get('filename')}</filename>\n"
@@ -280,11 +364,16 @@ Rules:
    - Textbooks / References: carefully scan the bottom of the course pages for sections like 'Textbooks:', 'Reference books:', or 'Online References:'. Do NOT claim they are missing just because they are buried at the bottom of the page.
    - Course Evaluation / Assessment: check both the 'Examination Scheme' table (which lists ISE, MSE, ESE, CIAP, ESEP, Total marks) AND any detailed 'Course Assessment:' or 'End Semester Examination:' sections (which detail Term Work/CIAP oral & written marks, test weightage, etc.). Provide the exact, accurate breakdown of marks as given in the syllabus.
 6. If the requested detail is truly not in the context, politely explain that you cannot find the requested information in the available SIES documents. 
-7. Cross-Referencing Electives & Minors: If the user asks for electives or Multidisciplinary Minors (MDM) in a specific semester, you must list EVERY category explicitly (e.g. 'Program Elective-III', 'Program Elective-IV') as separate tables or lists. Do not merge them! When extracting domains/tracks, note that PDF text flattening can cause headers to wrap. For example, 'Network and Security' or 'Artificial Intelligence' might span multiple lines under 'Technology Bucket'. The actual course codes below the headers (e.g. CEPEC7011, CEPEC7012, CEPEC7013, CEPEC7014) map 1-to-1 horizontally to those domain headers (e.g. General, Smart Systems, Network and Security, Artificial Intelligence). Align them carefully and output separate Markdown tables for EACH elective category. For example, if you see both 'Program Elective-III' AND 'Program Elective-IV', you MUST output a table for Program Elective-III, and then another separate table for Program Elective-IV. DO NOT stop after the first table. (e.g., both 'Program Elective-III' and 'Program Elective-IV' if present). Then, you MUST scan the other pages to find the detailed lists for EVERY category you found. List the ACTUAL SUBJECT NAMES for each category (e.g., "Advanced Database Management System"). Do NOT just output generic placeholders like "CEPEC501X". NEVER list electives from other semesters.
-8. Mention the referred source pages exactly once naturally in the first sentence of your response.. Do NOT append a separate 'Sources' or 'References' list at the end of your answer.
+7. Electives & Minors Formatting: When asked for electives, minors, or elective options in a semester:
+   - DO NOT format electives as a table. Tables with courses in cells look messy and unreadable. Instead, use clear markdown subheadings (### Program Elective-X) and clean bullet points for each technology bucket/domain (e.g. - **General**: CEPEC7011: High Performance Computing).
+   - First state which Program Elective(s) / MDM categories the semester offers based on the structure (e.g., Semester V offers Program Elective-I and MDM-II; Semester VI offers Program Elective-II and MDM-III; Semester VII offers Program Elective-III, Program Elective-IV and MDM-IV).
+   - Then display the specific elective/minor course options under each domain/technology bucket (e.g., General, Smart Systems, Network and Security, Artificial Intelligence, Data Science).
+   - Only list the electives and minors that belong to the requested semester. Never list electives or minors from other semesters.
+   - List the actual subject names and course codes (e.g., 'CEPEC7011: High Performance Computing'), not placeholders like 'CEPEC701X'.
+8. CRITICAL: Do NOT mention source documents, file names, citations, or page numbers inside your response text (e.g., do NOT write "Referred from...", "Source:", or cite PDF pages). The UI already displays clickable sources separately. Start your answer immediately with the requested information.
 9. Lab Experiments: If the user asks for lab experiments, you MUST carefully scan the entire text and extract EVERY SINGLE numbered experiment (there are often 10 to 15+ experiments). DO NOT stop early or skip any. FORMATTING: If the user explicitly asks for an "experiments list", provide ONLY the title or a very short 1-sentence summary of each experiment to save space. If the user just asks for "experiments" (without the word 'list'), provide the full description for each experiment.
 10. HINTS: If the provided context text explicitly contains a ">>> CRITICAL HINT:" block at the very top, you MUST incorporate its contents into your answer. Do NOT invent or generate your own hints.
-  11. If the context contains tabular data (like semester credit distributions or course nomenclatures), you MUST format your answer as a properly formatted Markdown table (| Column 1 | Column 2 |) so it is readable and DO NOT truncate the table.{module_requirement}
+  11. Tabular Data: Only format semester program structures (the core subject list with teaching schemes/credits) or credit distribution summaries as Markdown tables. Do NOT use tables for listing elective options (use clean bullet points as per Rule 7).{module_requirement}
   12. Specific Module Requests: If the user asks for the contents or subtopics of a specific module (e.g. 'finite automata'), provide ONLY the units/subtopics for that exact module as a clean list or table. Do NOT output raw syllabus text, and do NOT include other unrelated modules.
   13. OUTPUT FORMAT: Do NOT regurgitate or copy the SOURCE CONTEXT back to the user. Start your answer immediately with the requested information.
 

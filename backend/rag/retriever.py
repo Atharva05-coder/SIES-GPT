@@ -166,12 +166,16 @@ def _semester_structure_pages() -> tuple[dict, ...]:
             
             semesters = [
                 _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(text)
+                if _semester_number(match.group(1)) > 0
             ]
             
-            if "Program Structure for" in text or page_num in [12, 14, 16]:
+            if "Program Structure for" in text or page_num in [10, 12, 14, 16]:
+                if page_num == 10: semesters.append(4)
                 if page_num == 12: semesters.append(5)
-                if page_num == 14: semesters.append(5)
-                if page_num == 16: semesters.append(6)
+                if page_num == 14: semesters.append(6)
+                if page_num == 16: semesters.append(7)
+                
+            semesters = list(dict.fromkeys(semesters))
                 
             if semesters:
                 pages.append({
