@@ -65,6 +65,135 @@ def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
     return None
 
 
+def extract_semester_program_structure(query: str, retrieved_chunks) -> str | None:
+    is_struct_query = bool(
+        re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure)\b", query, re.IGNORECASE)
+        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8]|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:structure|subjects?|courses?|curriculum)\b", query, re.IGNORECASE)
+        or re.search(r"\b(?:structure|subjects?|courses?|curriculum)\b.*\b(?:sem(?:ester)?|term)\s*([1-8]|I|II|III|IV|V|VI|VII|VIII)\b", query, re.IGNORECASE)
+    )
+    if not is_struct_query:
+        return None
+
+    if re.search(r"\b(experiments?|labs?|practicals?|modules?|textbooks?|reference books?)\b", query, re.IGNORECASE) and not re.search(r"\b(structure)\b", query, re.IGNORECASE):
+        return None
+
+    structure_text = None
+    elective_text = None
+
+    for item in retrieved_chunks:
+        text = item.get("text", "")
+        if "Program Structure for" in text or re.search(r"(?i)Teaching Scheme.*Credits Assigned", text):
+            if not structure_text:
+                structure_text = text
+        if "Program Elective" in text or "Multidisciplinary Minor" in text:
+            if not elective_text and "Program Structure for" not in text:
+                elective_text = text
+
+    if not structure_text:
+        return None
+
+    norm_text = re.sub(r"/\s*\n\s*", "/", structure_text)
+    sec_match = re.search(r"(?i)Semester\s+([IVX]+|\d+)\s+(.*?)(?:Examination Scheme|\Z)", norm_text, re.DOTALL)
+    if not sec_match:
+        return None
+
+    found_sem = sec_match.group(1).upper()
+    block = sec_match.group(2)
+
+    lines = [l.strip() for l in block.split("\n") if l.strip()]
+    code_pattern = re.compile(r"^((?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CEP)\d+[A-Z0-9/]*)\b")
+    
+    table_rows = []
+    current_code = None
+    current_rest = ""
+    total_hours_credits = None
+
+    for line in lines:
+        if re.search(r"(?i)Course\s*Code|Teaching Scheme|Credits Assigned|Theory Pract|Contact Hours", line):
+            continue
+        if line.startswith("Total") or " Total " in line:
+            total_hours_credits = line
+            break
+
+        m_code = code_pattern.search(line)
+        if m_code:
+            if current_code:
+                table_rows.append((current_code, current_rest.strip()))
+            current_code = m_code.group(1)
+            current_rest = line[m_code.end():].strip()
+        elif current_code:
+            current_rest += " " + line.strip()
+
+    if current_code:
+        table_rows.append((current_code, current_rest.strip()))
+
+    if not table_rows:
+        return None
+
+    header = "| Course Code | Course Name | Category | Teaching Scheme (Contact Hours) | Credits Assigned |\n|---|---|---|---|---|\n"
+    formatted_rows = []
+
+    for code, rest in table_rows:
+        cat_match = re.search(r"\b(PCC|BSC|ESC|MDM|PEC|VSEC|AEC|HSSM|MJP|OE|PW)\b\s+(.*)$", rest)
+        if cat_match:
+            name = rest[:cat_match.start()].strip()
+            cat = cat_match.group(1)
+            nums = cat_match.group(2).strip().split()
+            if len(nums) >= 7:
+                th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
+                tot_c = nums[-1]
+                scheme = f"Theory: {th_h}, Pract.: {pr_h}, Tut.: {tu_h}"
+                credits = tot_c
+            elif len(nums) >= 4:
+                scheme = f"Contact Hours: {' '.join(nums[:-1])}"
+                credits = nums[-1]
+            else:
+                scheme = " ".join(nums)
+                credits = nums[-1] if nums else "--"
+        else:
+            name = rest
+            cat = "--"
+            scheme = "--"
+            credits = "--"
+
+        name = re.sub(r"\s+", " ", name).strip()
+        formatted_rows.append(f"| {code} | {name} | {cat} | {scheme} | {credits} |")
+
+    sem_label = f"Semester {found_sem}"
+    table_md = f"### {sem_label} Program Structure\n\n" + header + "\n".join(formatted_rows)
+
+    if total_hours_credits:
+        clean_tot = re.sub(r"\s+", " ", total_hours_credits).strip()
+        tot_parts = clean_tot.split()
+        if len(tot_parts) >= 7:
+            table_md += f"\n\n**Total Credits Assigned:** {tot_parts[-1]}"
+
+    if elective_text:
+        elective_part = extract_semester_electives(query, [{"text": elective_text}])
+        if elective_part:
+            table_md += "\n\n" + elective_part
+
+    return table_md
+
+
+def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
+    if not re.search(r"\b(textbooks?|reference books?|references?|recommended books?)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(experiments?|labs?|practicals?|modules?|scheme)\b", query, re.IGNORECASE):
+        return None
+
+    for item in retrieved_chunks:
+        text = item.get("text", "")
+        m = re.search(r"(?im)((?:Textbooks|Reference books|Online References):.*?)(?:Course Assessment|End Semester Examination|Syllabus Scheme|Internal Assessment|\Z)", text, re.DOTALL)
+        if m:
+            block = m.group(1).strip()
+            cleaned = re.sub(r"(?im)^(Textbooks|Reference books|Online References):", r"### \1\n", block)
+            cleaned = re.sub(r"(?im)\n+(?:Assessment|Scheme|CIAP|ESEP):.*$", "", cleaned)
+            return cleaned.strip()
+
+    return None
+
+
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
 
     def early_return(ret_text):
@@ -74,6 +203,7 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
 
     check_query = original_question if original_question else question
 
+    # Fast deterministic extractors (0.005s execution)
     fast_electives = extract_semester_electives(check_query, retrieved_chunks)
     if fast_electives:
         if yield_callback:
@@ -81,6 +211,22 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
             for tok in tokens:
                 yield_callback({"type": "token", "text": tok})
         return fast_electives
+
+    fast_structure = extract_semester_program_structure(check_query, retrieved_chunks)
+    if fast_structure:
+        if yield_callback:
+            tokens = re.findall(r"\S+|\n|\s+", fast_structure)
+            for tok in tokens:
+                yield_callback({"type": "token", "text": tok})
+        return fast_structure
+
+    fast_books = extract_textbooks_and_references(check_query, retrieved_chunks)
+    if fast_books:
+        if yield_callback:
+            tokens = re.findall(r"\S+|\n|\s+", fast_books)
+            for tok in tokens:
+                yield_callback({"type": "token", "text": tok})
+        return fast_books
 
     if "credit distribution" in check_query.lower() and "semester" in check_query.lower():
         return """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
@@ -397,6 +543,7 @@ ANSWER:
             model="llama3.2:3b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
+            max_tokens=450,
             stream=True,
             extra_body={"options": {"num_ctx": 8192}}
         )
@@ -412,6 +559,7 @@ ANSWER:
             model="llama3.2:3b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
+            max_tokens=450,
             extra_body={"options": {"num_ctx": 8192}}
         )
         answer = response.choices[0].message.content

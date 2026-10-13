@@ -253,6 +253,32 @@ from agent import agent as intent_agent
 from agents import Runner
 
 
+FAST_SYLLABUS_RE = re.compile(
+    r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
+    r"exam|examination|scheme|internal assessment|ese|ise|ciap|esep|mse|practicals?|experiments?|"
+    r"labs?|textbooks?|references?|minors?|mdm|electives?|pep?|oec?|hours?|teaching scheme|"
+    r"unit\s*\d+|topics?|outcomes?|los?|cos?)\b"
+    r"|\b(?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CSC|CSL|ITC|ITL|AIDS|AIML)\d{2,4}[A-Z0-9/]*\b",
+    re.IGNORECASE,
+)
+
+FAST_WEBSITE_RE = re.compile(
+    r"\b(faculty|teacher|prof|professor|hod|principal|dean|admissions?|fees?|placements?|"
+    r"packages?|highest package|average package|companies|recruiters|campus|canteen|library|"
+    r"hostel|events?|fest|rotaract|student council|contact|address|location|reach|bus|train|"
+    r"railway|concession|documents? required|eligibility criteria)\b",
+    re.IGNORECASE,
+)
+
+
+def fast_classify_intent(query: str) -> str | None:
+    if FAST_SYLLABUS_RE.search(query):
+        return "syllabus"
+    if FAST_WEBSITE_RE.search(query):
+        return "website"
+    return None
+
+
 @app.post("/api/smart_chat")
 async def smart_chat(req: ChatRequest) -> StreamingResponse:
     if req.messages[-1].role != "user":
@@ -262,16 +288,18 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
 
     last_message = req.messages[-1].content
 
-    # Classify intent using the new agent in agent.py
-    try:
-        from agent import Message
+    # Fast-path hybrid intent routing (instant: 0.0001s)
+    intent = fast_classify_intent(last_message)
+    if intent is None:
+        try:
+            from agent import Message
 
-        result = await Runner.run(intent_agent, last_message)
-        parsed = result.final_output_as(Message)
-        intent = parsed.intent
-    except Exception as e:
-        log.error(f"Intent classifier failed: {e}")
-        intent = "website"
+            result = await Runner.run(intent_agent, last_message)
+            parsed = result.final_output_as(Message)
+            intent = parsed.intent
+        except Exception as e:
+            log.error(f"Intent classifier failed: {e}")
+            intent = "website"
 
     log.info(f"Routed query to: {intent}")
 
