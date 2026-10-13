@@ -5,7 +5,10 @@ import os
 
 
 def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
-    if not re.search(r"\b(electives?|elective options?)\b", query, re.IGNORECASE):
+    is_elective_query = bool(re.search(r"\b(electives?|elective options?)\b", query, re.IGNORECASE))
+    is_minor_query = bool(re.search(r"\b(minors?|mdms?|multidisciplinary minors?)\b", query, re.IGNORECASE))
+    
+    if not is_elective_query and not is_minor_query:
         return None
     if re.search(r"\b(experiments?|labs?|practicals?|modules?|examination scheme|exam scheme|evaluation|assessment)\b", query, re.IGNORECASE):
         return None
@@ -33,34 +36,63 @@ def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
             "Data Science: CEPEC7021: Augmented Reality and Virtual Reality\nSmart Systems: CEPEC7022: Quantum Computing\nNetwork and Security: CEPEC7023: Intelligent Forensic\nArtificial Intelligence: CEPEC7024: Reinforcement Learning"
         )
 
-        sections = re.split(r"(?i)(Program Elective\s*[-–—]?\s*(?:[I|V|X]+|\d+))", clean_text)
-        if len(sections) < 3:
-            continue
+        if is_minor_query and "Multidisciplinary Minor" in clean_text:
+            idx = clean_text.find("Multidisciplinary Minor")
+            mdm_part = clean_text[idx:]
+            oe_idx = mdm_part.find("Open Elective")
+            if oe_idx != -1:
+                mdm_part = mdm_part[:oe_idx]
+            lines = [l.strip() for l in mdm_part.split("\n") if l.strip()]
+            courses = []
+            curr_code = None
+            curr_name = ""
+            code_re = re.compile(r"^(MDM[CL]\d{4}):\s*(.*)$")
+            for line in lines:
+                m_code = code_re.match(line)
+                if m_code:
+                    if curr_code:
+                        courses.append((curr_code, re.sub(r"\s+", " ", curr_name).strip()))
+                    curr_code = m_code.group(1)
+                    curr_name = m_code.group(2)
+                elif curr_code:
+                    curr_name += " " + line
+            if curr_code:
+                courses.append((curr_code, re.sub(r"\s+", " ", curr_name).strip()))
+            if courses:
+                roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
+                sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
+                res = [f"### {sem_str} Multidisciplinary Minor (MDM) Options\n"]
+                for c, n in courses:
+                    res.append(f"- **{c}**: {n}")
+                return "\n".join(res)
 
-        results = []
-        category_names = []
-        for i in range(1, len(sections), 2):
-            raw_header = sections[i].strip()
-            header = re.sub(r"Program\s+Elective\s*[-–—]?\s*", "Program Elective - ", raw_header, flags=re.IGNORECASE).strip()
-            category_names.append(header)
-            body = sections[i+1]
-            lines = []
-            for line in body.split("\n"):
-                line = line.strip()
-                if re.search(r"\b(Multidisciplinary Minor|Open Elective)\b", line, re.IGNORECASE):
-                    break
-                m_match = re.match(r"^([^:]+):\s*(CEPEC\d+):\s*(.+)$", line)
-                if m_match:
-                    bucket, code, name = m_match.group(1).strip(), m_match.group(2).strip(), m_match.group(3).strip()
-                    lines.append(f"- **{bucket}**: {code}: {name}")
-            if lines:
-                results.append(f"### {header}\n" + "\n".join(lines))
+        if is_elective_query:
+            sections = re.split(r"(?i)(Program Elective\s*[-–—]?\s*(?:[I|V|X]+|\d+))", clean_text)
+            if len(sections) >= 3:
+                results = []
+                category_names = []
+                for i in range(1, len(sections), 2):
+                    raw_header = sections[i].strip()
+                    header = re.sub(r"Program\s+Elective\s*[-–—]?\s*", "Program Elective - ", raw_header, flags=re.IGNORECASE).strip()
+                    category_names.append(header)
+                    body = sections[i+1]
+                    lines = []
+                    for line in body.split("\n"):
+                        line = line.strip()
+                        if re.search(r"\b(Multidisciplinary Minor|Open Elective)\b", line, re.IGNORECASE):
+                            break
+                        m_match = re.match(r"^([^:]+):\s*(CEPEC\d+):\s*(.+)$", line)
+                        if m_match:
+                            bucket, code, name = m_match.group(1).strip(), m_match.group(2).strip(), m_match.group(3).strip()
+                            lines.append(f"- **{bucket}**: {code}: {name}")
+                    if lines:
+                        results.append(f"### {header}\n" + "\n".join(lines))
 
-        if results:
-            roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
-            sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
-            intro = f"{sem_str} offers **{'** and **'.join(category_names)}**. Below are the available elective options:\n\n"
-            return intro + "\n\n".join(results)
+                if results:
+                    roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
+                    sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
+                    intro = f"{sem_str} offers **{'** and **'.join(category_names)}**. Below are the available elective options:\n\n"
+                    return intro + "\n\n".join(results)
 
     return None
 
