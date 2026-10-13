@@ -233,6 +233,22 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
     return table_md
 
 
+def extract_course_module_outline(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+    if not all(item.get("metadata", {}).get("course_outline", False) for item in retrieved_chunks):
+        return None
+    is_syllabus_query = bool(
+        re.search(r"\b(syllabus|curriculum|course content|course outline|modules?|units?)\b", query, re.IGNORECASE)
+    )
+    if not is_syllabus_query:
+        return None
+    if re.search(r"\b(how many|how much|count|total number|number of|why|explain|difference between|compare|what is the purpose|prerequisites?)\b", query, re.IGNORECASE):
+        return None
+
+    return "\n\n".join(item["text"].strip() for item in retrieved_chunks)
+
+
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
     if not re.search(r"\b(textbooks?|reference books?|references?|recommended books?)\b", query, re.IGNORECASE):
         return None
@@ -263,29 +279,21 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     check_query = original_question if original_question else question
 
     # Fast deterministic extractors (0.005s execution)
+    fast_outline = extract_course_module_outline(check_query, retrieved_chunks)
+    if fast_outline:
+        return early_return(fast_outline)
+
     fast_electives = extract_semester_electives(check_query, retrieved_chunks)
     if fast_electives:
-        if yield_callback:
-            tokens = re.findall(r"\S+|\n|\s+", fast_electives)
-            for tok in tokens:
-                yield_callback({"type": "token", "text": tok})
-        return fast_electives
+        return early_return(fast_electives)
 
     fast_structure = extract_semester_program_structure(check_query, retrieved_chunks)
     if fast_structure:
-        if yield_callback:
-            tokens = re.findall(r"\S+|\n|\s+", fast_structure)
-            for tok in tokens:
-                yield_callback({"type": "token", "text": tok})
-        return fast_structure
+        return early_return(fast_structure)
 
     fast_books = extract_textbooks_and_references(check_query, retrieved_chunks)
     if fast_books:
-        if yield_callback:
-            tokens = re.findall(r"\S+|\n|\s+", fast_books)
-            for tok in tokens:
-                yield_callback({"type": "token", "text": tok})
-        return fast_books
+        return early_return(fast_books)
 
     if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
         table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
