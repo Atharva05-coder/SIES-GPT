@@ -28,5 +28,14 @@ export interface Health {
   building: boolean;
   pages: number;
   chunks: number;
+  pdf_ready?: boolean;
+  pdf_chunks?: number;
   error: string | null;
+}
+
+export interface PdfStatus {
+  ready: boolean;
+  cached_chunks: number;
+  indexed_chunks: number;
+  documents: string[];
 }

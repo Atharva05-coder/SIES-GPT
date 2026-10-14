@@ -6,9 +6,9 @@ import { Sources } from "./Sources";
 
 const SUGGESTIONS = [
   "Who are the faculty in Computer Engineering?",
-  "What undergraduate courses does SIES GST offer?",
-  "Tell me about placements and recruiters.",
-  "How can I apply for admission?",
+  "What is the program structure and electives for Sem 6?",
+  "What are the internship guidelines and policies?",
+  "Tell me about the NBA accreditation and IPR team.",
 ];
 
 /** Removes a trailing "Sources:" block if the model wrote one anyway
@@ -90,7 +90,7 @@ export function MessageList({ messages, onPick, disabled }: Props) {
       <div className="scroller">
         <div className="container empty">
           <h2>Ask anything about SIES GST</h2>
-          <p>Answers come from the college website, with sources.</p>
+          <p>Answers come from the college website, syllabus, and official documents, with sources.</p>
           <div className="suggestions">
             {SUGGESTIONS.map((s) => (
               <button

@@ -14,7 +14,7 @@ load_dotenv()
 
 class Message(BaseModel):
     text: str
-    intent: Literal["syllabus", "website"]
+    intent: Literal["syllabus", "website", "document"]
 
 
 agent = Agent(
@@ -23,7 +23,8 @@ agent = Agent(
 
 Categories:
 1. 'syllabus' - The user is asking about academic courses, curriculum, modules, syllabus content, practicals, textbooks, or credits.
-2. 'website' - The user is asking about faculty, HODs, admissions, placements, campus facilities, general college information, or events.""",
+2. 'document' - The user is asking about official PDF documents, institutional policies, brochures (e.g. Epsilon), guidelines, internship policies, emergency exits, floor plans, IPR team, accreditation letters (NBA), rules, or circulars.
+3. 'website' - The user is asking about faculty, HODs, admissions, placements, campus facilities, general college information, or events.""",
     model=OpenAIChatCompletionsModel(
         "",
         openai_client=AsyncOpenAI(

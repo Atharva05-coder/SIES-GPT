@@ -56,7 +56,7 @@ export function Composer({ busy, ready, canClear, onSend, onStop, onClear }: Pro
             rows={1}
             value={text}
             maxLength={4000}
-            placeholder={ready ? "Ask about faculty, courses, admissions…" : "Getting ready…"}
+            placeholder={ready ? "Ask about faculty, courses, syllabus, documents…" : "Getting ready…"}
             aria-label="Message"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
@@ -77,7 +77,7 @@ export function Composer({ busy, ready, canClear, onSend, onStop, onClear }: Pro
             </button>
           )}
         </div>
-        <p className="fineprint">Answers come from the SIES GST website and may be incomplete.</p>
+        <p className="fineprint">Answers come from the SIES GST website, syllabus, and official documents.</p>
       </div>
     </div>
   );

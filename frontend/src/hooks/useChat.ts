@@ -18,8 +18,12 @@ const createChatId = () => `c${Date.now()}-${Math.random().toString(36).substrin
 
 const MAX_HISTORY = 12;
 
-const statusFor = (tool: string) =>
-  tool === "read_page" ? "Reading page" : "Searching the website";
+const statusFor = (tool: string) => {
+  if (tool === "read_page") return "Reading page";
+  if (tool === "search_sies_pdfs") return "Searching PDF documents";
+  if (tool === "search_syllabus") return "Searching syllabus";
+  return "Searching the website";
+};
 
 function readChatHistory(): ChatSession[] {
   try {

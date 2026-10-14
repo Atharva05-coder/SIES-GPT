@@ -54,3 +54,20 @@ export async function streamChat(
     }
   }
 }
+
+export async function fetchPdfStatus(signal?: AbortSignal): Promise<import("./types").PdfStatus> {
+  const res = await fetch(`${BASE}/api/pdf/status`, { signal });
+  if (!res.ok) throw new Error(`PDF status failed (${res.status})`);
+  return (await res.json()) as import("./types").PdfStatus;
+}
+
+export async function triggerPdfIngest(adminToken?: string): Promise<{ status: string }> {
+  const headers: Record<string, string> = {};
+  if (adminToken) headers["X-Admin-Token"] = adminToken;
+  const res = await fetch(`${BASE}/api/pdf/ingest`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) throw new Error(`PDF ingest request failed (${res.status})`);
+  return (await res.json()) as { status: string };
+}

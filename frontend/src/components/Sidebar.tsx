@@ -57,6 +57,15 @@ export function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDelete
             </div>
           )}
         </div>
+
+        <div className="sidebar-footer" style={{ padding: '16px', borderTop: '1px solid var(--border)', fontSize: '12px', color: 'var(--text-muted)' }}>
+          <div style={{ fontWeight: 600, marginBottom: '6px', color: 'var(--text)' }}>Active Knowledge Bases</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span>📚 Syllabus & Labs RAG</span>
+            <span>🌐 Website Pages & Faculty</span>
+            <span>📄 Official Documents & Policies</span>
+          </div>
+        </div>
       </div>
     </>
   );
