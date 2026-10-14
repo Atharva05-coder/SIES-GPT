@@ -249,22 +249,239 @@ def extract_course_module_outline(query: str, retrieved_chunks) -> str | None:
     return "\n\n".join(item["text"].strip() for item in retrieved_chunks)
 
 
+WORD_TO_NUM = {
+    "first": 1, "1st": 1, "1": 1, "one": 1,
+    "second": 2, "2nd": 2, "2": 2, "two": 2,
+    "third": 3, "3rd": 3, "3": 3, "three": 3,
+    "fourth": 4, "4th": 4, "4": 4, "four": 4,
+    "fifth": 5, "5th": 5, "5": 5, "five": 5,
+    "sixth": 6, "6th": 6, "6": 6, "six": 6,
+    "seventh": 7, "7th": 7, "7": 7, "seven": 7,
+    "eighth": 8, "8th": 8, "8": 8, "eight": 8,
+    "ninth": 9, "9th": 9, "9": 9, "nine": 9,
+    "tenth": 10, "10th": 10, "10": 10, "ten": 10,
+    "eleventh": 11, "11th": 11, "11": 11, "eleven": 11,
+    "twelfth": 12, "12th": 12, "12": 12, "twelve": 12,
+    "thirteenth": 13, "13th": 13, "13": 13, "thirteen": 13,
+    "fourteenth": 14, "14th": 14, "14": 14, "fourteen": 14,
+    "fifteenth": 15, "15th": 15, "15": 15, "fifteen": 15,
+}
+
+
+def parse_num_token(tok: str) -> int | None:
+    tok = tok.lower().strip()
+    if tok in WORD_TO_NUM:
+        return WORD_TO_NUM[tok]
+    clean = re.sub(r"(?:st|nd|rd|th)$", "", tok)
+    if clean.isdigit():
+        return int(clean)
+    return None
+
+
+def parse_experiment_range(query: str) -> tuple[int, int]:
+    m_range = re.search(r"\b(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
+    if m_range:
+        n1 = parse_num_token(m_range.group(1))
+        n2 = parse_num_token(m_range.group(2))
+        if n1 is not None and n2 is not None:
+            return (min(n1, n2), max(n1, n2))
+
+    m_between = re.search(r"\bbetween\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s+and\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
+    if m_between:
+        n1 = parse_num_token(m_between.group(1))
+        n2 = parse_num_token(m_between.group(2))
+        if n1 is not None and n2 is not None:
+            return (min(n1, n2), max(n1, n2))
+
+    m_first = re.search(r"\b(?:first|top)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
+    if m_first:
+        n = parse_num_token(m_first.group(1))
+        if n is not None:
+            return (1, n)
+
+    m_single = re.search(r"\b(?:experiments?|practicals?|tasks?|exp\.?)\s*(?:no\.?|#)?\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
+    if m_single:
+        n = parse_num_token(m_single.group(1))
+        if n is not None:
+            return (n, n)
+
+    m_nth = re.search(r"\b(\d+(?:st|nd|rd|th)?|[a-z]+)\s+(?:experiments?|practicals?|tasks?)\b", query, re.IGNORECASE)
+    if m_nth:
+        n = parse_num_token(m_nth.group(1))
+        if n is not None:
+            return (n, n)
+
+    return (1, 50)
+
+
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
-    if not re.search(r"\b(textbooks?|reference books?|references?|recommended books?)\b", query, re.IGNORECASE):
+    if not re.search(r"\b(textbooks?|reference books?|references?|recommended books?|online references?|online resources?)\b", query, re.IGNORECASE):
         return None
     if re.search(r"\b(experiments?|labs?|practicals?|modules?|scheme)\b", query, re.IGNORECASE):
         return None
 
+    is_only_online = bool(re.search(r"\bonline\s+(?:references?|resources?)\b", query, re.IGNORECASE))
+    is_only_textbooks = bool(re.search(r"\btextbooks?\b", query, re.IGNORECASE) and not re.search(r"\b(references?|reference books?|online|all|both)\b", query, re.IGNORECASE))
+    is_only_references = bool(re.search(r"\b(references?|reference books?)\b", query, re.IGNORECASE) and not re.search(r"\b(textbooks?|all|both)\b", query, re.IGNORECASE))
+
     for item in retrieved_chunks:
         text = item.get("text", "")
-        m = re.search(r"(?im)((?:Textbooks|Reference books|Online References):.*?)(?:Course Assessment|End Semester Examination|Syllabus Scheme|Internal Assessment|\Z)", text, re.DOTALL)
-        if m:
-            block = m.group(1).strip()
-            cleaned = re.sub(r"(?im)^(Textbooks|Reference books|Online References):", r"### \1\n", block)
-            cleaned = re.sub(r"(?im)\n+(?:Assessment|Scheme|CIAP|ESEP):.*$", "", cleaned)
-            return cleaned.strip()
+        if not re.search(r"(?i)\b(?:Textbooks|Reference books|References|Online References|Online Resources):", text):
+            continue
+
+        clean_text = re.split(r"(?i)\n\s*(?:Course Assessment|End Semester Examination|Internal Assessment|Assessment Scheme|Term Work|CIAP|ESEP):", text)[0]
+
+        tb_match = re.search(r"(?is)(?:Textbooks?|Text books?):\s*(.*?)(?=\n\s*(?:Reference books?|References|Online References|Online Resources):|\Z)", clean_text)
+        ref_match = re.search(r"(?is)(?:Reference books?|References):\s*(.*?)(?=\n\s*(?:Textbooks?|Text books?|Online References|Online Resources):|\Z)", clean_text)
+        online_match = re.search(r"(?is)(?:Online References|Online Resources):\s*(.*?)(?=\n\s*(?:Textbooks?|Text books?|Reference books?|References):|\Z)", clean_text)
+
+        tb_text = tb_match.group(1).strip() if tb_match else ""
+        ref_text = ref_match.group(1).strip() if ref_match else ""
+        online_text = online_match.group(1).strip() if online_match else ""
+
+        results = []
+        if is_only_textbooks:
+            if tb_text:
+                results.append(f"### Textbooks\n{tb_text}")
+        elif is_only_online:
+            if online_text:
+                results.append(f"### Online References\n{online_text}")
+        elif is_only_references:
+            if ref_text:
+                results.append(f"### References\n{ref_text}")
+            if online_text:
+                results.append(f"### Online References\n{online_text}")
+        else:
+            if tb_text:
+                results.append(f"### Textbooks\n{tb_text}")
+            if ref_text:
+                results.append(f"### References\n{ref_text}")
+            if online_text:
+                results.append(f"### Online References\n{online_text}")
+
+        if results:
+            return "\n\n".join(results)
 
     return None
+
+
+def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
+    if not re.search(r"\b(experiments?|practicals?|tasks?|lab experiments?)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(examination scheme|exam scheme|evaluation|credit distribution|hours?|module \d+)\b", query, re.IGNORECASE):
+        return None
+
+    all_experiments: dict[int, dict] = {}
+    last_exp_num = 0
+    at_least_count = None
+
+    for item in retrieved_chunks:
+        text = item.get("text", "")
+        current_num = None
+        pending_num = None
+        in_experiments_section = False
+
+        m_least = re.search(r"(?i)at\s+least\s+(\d+)\s+experiments", text)
+        if m_least and not at_least_count:
+            at_least_count = m_least.group(1)
+
+        for raw_line in text.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if re.match(r"^(LO\d+|Term Work|Textbooks|Reference books|Online References|Online Resources|Software Tools|Hardware Tools|Lab Outcomes?|Course Outcomes?|Lab Objectives?|Practical Exam)", line, re.IGNORECASE):
+                in_experiments_section = False
+                current_num = None
+                continue
+
+            if re.search(r"(List of Experiments|Suggested List)", line, re.IGNORECASE):
+                in_experiments_section = True
+                continue
+
+            m = re.match(r"^(\d+)(?:\s+([A-Z].*))?$", line)
+            if m and 0 < int(m.group(1)) < 50:
+                num = int(m.group(1))
+                if num == 1 or num == last_exp_num + 1 or num == last_exp_num + 2:
+                    if num in all_experiments and not in_experiments_section:
+                        continue
+                    if m.group(2):
+                        current_num = num
+                        last_exp_num = num
+                        pending_num = None
+                        if current_num not in all_experiments or in_experiments_section:
+                            all_experiments[current_num] = {"title": m.group(2), "full": [f"{current_num}. {m.group(2)}"]}
+                    else:
+                        pending_num = num
+                    continue
+
+            if pending_num is not None:
+                if re.match(r"^[A-Z]", line):
+                    current_num = pending_num
+                    last_exp_num = pending_num
+                    pending_num = None
+                    if current_num not in all_experiments or in_experiments_section:
+                        all_experiments[current_num] = {"title": line, "full": [f"{current_num}. {line}"]}
+                    continue
+
+            if current_num:
+                if current_num in all_experiments:
+                    cleaned_line = re.sub(r"^[^\w\s\(\)\[\]\-]+", "-", line)
+                    cleaned_line = re.sub(r"[\uFFFD\u2022\x95]", "-", cleaned_line)
+                    all_experiments[current_num]["full"].append(cleaned_line)
+
+    if not all_experiments:
+        return None
+
+    is_counting = bool(re.search(r"\b(how many|how much|count|total number|number of)\b", query, re.IGNORECASE))
+    if is_counting:
+        total_listed = len(all_experiments)
+        if at_least_count:
+            return f"According to the syllabus, students are required to complete at least {at_least_count} experiments from the {total_listed} listed experiments for this lab."
+        return f"According to the syllabus, there are {total_listed} experiments listed for this lab."
+
+    start_idx, end_idx = parse_experiment_range(query)
+    is_short_list = bool(re.search(r"\blist\b", query, re.IGNORECASE) and not re.search(r"\b(detail|describe|task|all)\b", query, re.IGNORECASE))
+
+    exp_blocks = []
+    for k in sorted(all_experiments.keys()):
+        if start_idx <= k <= end_idx:
+            raw_lines = all_experiments[k]["full"]
+            formatted_lines = []
+            for raw_l in raw_lines:
+                l_str = raw_l.strip()
+                if not l_str:
+                    continue
+                if not formatted_lines:
+                    formatted_lines.append(l_str)
+                    continue
+                prev = formatted_lines[-1]
+                is_list_item = bool(re.match(r"^([-*o\u2022]\s|[a-z]\)|\d+\.|Tasks?:)", l_str, re.IGNORECASE))
+                prev_ends_sentence = bool(re.search(r"[\.:;!?]$", prev))
+                if not is_list_item and not prev_ends_sentence:
+                    formatted_lines[-1] = prev + " " + l_str
+                else:
+                    formatted_lines.append(l_str)
+
+            header = re.sub(r"^\d+[\.\)]\s*", "", formatted_lines[0])
+
+            if is_short_list or len(formatted_lines) == 1:
+                exp_blocks.append(f"- **Experiment {k}**: {header}")
+            else:
+                body = "\n".join(formatted_lines[1:])
+                exp_blocks.append(f"- **Experiment {k}**: {header}\n\n  {body}")
+
+    if not exp_blocks:
+        return None
+
+    if start_idx == end_idx:
+        intro = f"Here is Experiment {start_idx} from the syllabus:\n\n"
+    elif start_idx > 1 or end_idx < 50:
+        intro = f"Here are experiments {start_idx} to {end_idx} from the syllabus:\n\n"
+    else:
+        intro = "Here are the experiments from the syllabus:\n\n"
+
+    return intro + "\n\n".join(exp_blocks)
 
 
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
@@ -294,6 +511,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_books = extract_textbooks_and_references(check_query, retrieved_chunks)
     if fast_books:
         return early_return(fast_books)
+
+    fast_exps = extract_lab_experiments(check_query, retrieved_chunks)
+    if fast_exps:
+        return early_return(fast_exps)
 
     if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
         table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
