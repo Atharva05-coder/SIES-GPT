@@ -484,6 +484,229 @@ def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
     return intro + "\n\n".join(exp_blocks)
 
 
+_sections_cache = None
+
+def get_sections_dict():
+    global _sections_cache
+    if _sections_cache is None:
+        from rag.retriever import _course_sections
+        _sections_cache = {s["code"]: s for s in _course_sections()}
+    return _sections_cache
+
+
+def extract_course_name_from_header(header: str) -> str:
+    m = re.search(r"(\d{1,3}\s+(?:\d{1,3}|--|-)|--\s+\d{1,2}|\b\d{1,2}\b(?:\s*[\*\+]\s*\d+)?\s*(?:--|-|\d))", header)
+    if m:
+        raw_name = header[:m.start()]
+    else:
+        lines = [l.strip() for l in header.split("\n") if l.strip()]
+        raw_name = " ".join(lines[:3])
+    clean = re.sub(r"\s+", " ", raw_name).strip()
+    clean = re.sub(r"[\s\d\-–]+$", "", clean).strip()
+    return clean
+
+
+def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+
+    is_info_query = bool(
+        re.search(r"\b(information|informatin|info|details?|overview|summary|about|explain the course|explain the lab|tell me about)\b", query, re.IGNORECASE)
+        or re.search(r"^(?:what is|details? of|info on|explain)\s+[A-Za-z0-9\s-]+\??$", query.strip(), re.IGNORECASE)
+    )
+    if not is_info_query:
+        return None
+
+    if re.search(r"\b(program structure|curriculum structure|electives?|minors?|mdms?|credit distribution|semester-?wise credit|how many credits)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:only\s+)?(textbooks?|reference books?|references?)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(syllabus|curriculum|module\s+\d+)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+        return None
+
+    target_code = None
+    for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    if not target_code or target_code not in sections:
+        return None
+
+    section = sections[target_code]
+    p1_text = section["all_pages"][0]["text"]
+    course_name = extract_course_name_from_header(section["header"])
+    text_clean = re.sub(rf"\b{re.escape(target_code)}\b", "", p1_text)
+
+    # 1. Teaching Scheme & Credits
+    teaching_scheme = None
+    credits_assigned = None
+    m_teach = re.search(r"(?is)(?:Teaching\s*Scheme|Theory\s+Practical\s+Tutorial|Credits\s*Assigned).*?(?=\n\s*(?:Examination\s*Scheme|Pre-?requisite|Program\s*Outcomes)|\Z)", text_clean)
+    if m_teach:
+        block = m_teach.group(0)
+        header_match = re.search(r"(?i)(?:Tot\s*al|Total)", block)
+        sub_block = block[header_match.end():] if header_match else block
+        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        if len(nums) >= 6:
+            th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
+            th_c, pr_c, tu_c = nums[3], nums[4], nums[5]
+            tot_c = nums[6] if len(nums) >= 7 else nums[-1]
+            parts_h = []
+            if th_h not in ["--", "-", "0"]: parts_h.append(f"{th_h} (Theory)")
+            if pr_h not in ["--", "-", "0"]: parts_h.append(f"{pr_h} (Practical)")
+            if tu_h not in ["--", "-", "0"]: parts_h.append(f"{tu_h} (Tutorial)")
+            teaching_scheme = " + ".join(parts_h) if parts_h else "--"
+            credits_assigned = f"{tot_c}"
+        elif len(nums) >= 3:
+            teaching_scheme = f"{nums[0]} hrs (Theory)" if nums[0] not in ["--", "-"] else "--"
+            credits_assigned = f"{nums[-1]}"
+
+    # 2. Examination Scheme
+    exam_scheme = None
+    m_exam = re.search(r"(?is)Examination\s*Scheme.*?(?=\n\s*(?:Pre-?requisite|Program\s*Outcomes|Course\s*Objectives|Lab\s*Objectives|Exp\.?\s*No|Suggested\s*List|\*|\Z))", text_clean)
+    if m_exam:
+        block = m_exam.group(0)
+        header_end = re.search(r"(?i)(?:ISE\s+MSE|Total)", block)
+        sub_block = block[header_end.end():] if header_end else block
+        nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+        if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
+            ise, mse, ese, tot = nums[0], nums[1], nums[2], nums[3]
+            exam_scheme = f"ISE ({ise}), MSE ({mse}), ESE ({ese}) | Total: {tot}"
+        elif len(nums) >= 5:
+            ise, mse, ese = nums[0], nums[1], nums[2]
+            ciap, esep = nums[3], nums[4]
+            tot = nums[5] if len(nums) >= 6 else (nums[-1] if nums[-1] not in ["--", "-"] else "")
+            parts_e = []
+            if ise not in ["--", "-"]: parts_e.append(f"ISE ({ise})")
+            if mse not in ["--", "-"]: parts_e.append(f"MSE ({mse})")
+            if ese not in ["--", "-"]: parts_e.append(f"ESE ({ese})")
+            if ciap not in ["--", "-"]: parts_e.append(f"CIAP / Term Work ({ciap})")
+            if esep not in ["--", "-"]: parts_e.append(f"ESEP / Practical Exam ({esep})")
+            scheme_str = ", ".join(parts_e)
+            if tot and tot not in ["--", "-"]:
+                scheme_str += f" | Total: {tot}"
+            exam_scheme = scheme_str
+
+    # 3. Pre-requisite
+    prereq = None
+    m_prereq = re.search(r"(?is)Pre-?\s*requisite[s]?\s*:\s*(.*?)(?=\n\s*(?:Program\s*Outcomes?|Course\s*Objectives?|Lab\s*Objectives?)|\Z)", p1_text)
+    if m_prereq:
+        raw_pr = m_prereq.group(1).strip()
+        pr_lines = [re.sub(r"^\d+\.\s*", "", l.strip()) for l in raw_pr.split("\n") if l.strip()]
+        if pr_lines:
+            prereq = "; ".join(pr_lines)
+    if not prereq or prereq.lower() in ["nil", "none", "-", "--", "na", "not applicable"]:
+        prereq = "Nil"
+
+    # 4. Program Outcomes Addressed
+    pos = []
+    m_pos = re.search(r"(?is)Program\s*Outcomes?\s+(?:Addressed)?\s*(.*?)(?=\n\s*(?:Course\s*Objectives?|Lab\s*Objectives?|Course\s*Outcomes?|Lab\s*Outcomes?)|\Z)", p1_text)
+    if m_pos:
+        raw_pos = m_pos.group(1).strip()
+        for l in raw_pos.split("\n"):
+            l = l.strip()
+            l_clean = re.sub(r"^\d+\.\s*", "", l)
+            if re.match(r"^PO\d+", l_clean, re.IGNORECASE):
+                pos.append(l_clean)
+            elif pos and not re.search(r"(?i)Course|Lab|Objective|Outcome", l):
+                pos[-1] += " " + l
+
+    # Course / Lab distinction
+    is_lab = bool(re.search(r"\blab\b", course_name, re.I) or target_code.startswith("CEL") or target_code.startswith("FEL") or target_code.startswith("CEPEL") or target_code.startswith("MDML"))
+    obj_title = "Lab Objectives" if is_lab else "Course Objectives"
+    out_title = "Lab Outcomes" if is_lab else "Course Outcomes"
+
+    # Objectives
+    objs = []
+    m_obj = re.search(r"(?is)(?:Course|Lab)\s+Objectives?\s*:\s*(?:The course aims to enable students:)?\s*(.*?)(?=\n\s*(?:Course|Lab)\s+Outcomes?|\Z)", p1_text)
+    if m_obj:
+        raw_obj = m_obj.group(1).strip()
+        for l in raw_obj.split("\n"):
+            l = l.strip()
+            m_num = re.match(r"^\d+\.\s*(.*)", l)
+            if m_num:
+                item = re.sub(r"^(?:To\s+)?", "", m_num.group(1).strip())
+                if item:
+                    item = item[0].upper() + item[1:]
+                objs.append(item)
+            elif objs and not re.search(r"(?i)Course\s+Outcomes?|Lab\s+Outcomes?", l):
+                objs[-1] += " " + l
+
+    # Outcomes
+    outs = []
+    m_out = re.search(r"(?is)(?:Course|Lab)\s+Outcomes?\s*:\s*(?:Upon completion of this course.*?:)?\s*(.*?)(?=\n\s*(?:Course\s+Code|Teaching\s+Scheme|Module\s+No|Suggested\s+List)|\Z)", p1_text)
+    if m_out:
+        raw_out = m_out.group(1).strip()
+        for l in raw_out.split("\n"):
+            l = l.strip()
+            m_num = re.match(r"^\d+\.\s*(.*)", l)
+            if m_num:
+                item = m_num.group(1).strip()
+                if item:
+                    item = item[0].upper() + item[1:]
+                outs.append(item)
+            elif outs and not re.search(r"(?i)Teaching\s+Scheme|Course\s+Code", l):
+                outs[-1] += " " + l
+
+    # Assemble Markdown Response
+    res_lines = []
+    res_lines.append(f"**Course Code:** {target_code}  ")
+    res_lines.append(f"**Course Name:** {course_name}  ")
+    if teaching_scheme:
+        res_lines.append(f"**Teaching Scheme:** {teaching_scheme}  ")
+    if credits_assigned:
+        res_lines.append(f"**Credits Assigned:** {credits_assigned}  ")
+    if exam_scheme:
+        res_lines.append(f"**Examination Scheme:** {exam_scheme}  ")
+    res_lines.append(f"**Pre-requisite:** {prereq}\n")
+
+    if pos:
+        res_lines.append("**Program Outcomes Addressed:**")
+        for p in pos:
+            res_lines.append(f"- {p}")
+        res_lines.append("")
+
+    if objs:
+        res_lines.append(f"**{obj_title}:**")
+        for i, o in enumerate(objs, 1):
+            res_lines.append(f"{i}. {o}")
+        res_lines.append("")
+
+    if outs:
+        res_lines.append(f"**{out_title}:**")
+        for i, o in enumerate(outs, 1):
+            res_lines.append(f"{i}. {o}")
+        res_lines.append("")
+
+    if is_lab:
+        exps = extract_lab_experiments("all experiments", section["all_pages"])
+        if exps:
+            clean_exps = re.sub(r"^Here are (?:the|experiments).*?:\n\n", "", exps, flags=re.I).strip()
+            res_lines.append(f"### Suggested List of Experiments\n\n{clean_exps}\n")
+    else:
+        outlines = section.get("module_outlines", [])
+        if outlines:
+            res_lines.append("### Course Modules\n")
+            for m in outlines:
+                res_lines.append(m["text"])
+                res_lines.append("")
+
+    books = extract_textbooks_and_references("all textbooks and references", section["all_pages"])
+    if books:
+        res_lines.append(f"{books}")
+
+    return "\n".join(res_lines).strip()
+
+
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
 
     def early_return(ret_text):
@@ -515,6 +738,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_exps = extract_lab_experiments(check_query, retrieved_chunks)
     if fast_exps:
         return early_return(fast_exps)
+
+    fast_info = extract_course_full_information(check_query, retrieved_chunks)
+    if fast_info:
+        return early_return(fast_info)
 
     if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
         table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
