@@ -213,29 +213,28 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
             seen.add(u)
             searched_urls.append(u)
 
-    # Always read the top-ranked URL in full
+    # Extract clean text directly from index without "[Truncated]" strings
     top_url = searched_urls[0]
-    page_content = index.read_page(top_url)
+    p_obj = index.pages.get(sa.normalize_url(top_url))
+    if p_obj:
+        page_lines = p_obj.get("lines", [])
+        page_content = "\n".join(page_lines)
+    else:
+        page_content = index.read_page(top_url)
 
-    # If content is truncated, read the second chunk too
-    extra = ""
-    if "[Truncated." in page_content:
-        extra = index.read_page(top_url, offset=sa.READ_PAGE_CHARS)
-        if extra == "No more content.":
-            extra = ""
+    # Keep primary context concise (up to 3000 chars) for instant, fast LLM generation
+    full_content = page_content[:3000].strip()
 
-    full_content = (page_content + ("\n" + extra if extra else "")).strip()
-
-    # Also read second URL if it looks like a more specific page (profile/detail)
     read_urls = [top_url]
     if len(searched_urls) > 1:
         second_url = searched_urls[1]
-        # Heuristic: read second page if it's a sub-path (more specific)
         if second_url.rstrip("/") != top_url.rstrip("/"):
-            second_content = index.read_page(second_url)
-            if second_content and "Page not found" not in second_content:
-                full_content += f"\n\n--- Additional page: {second_url} ---\n{second_content[:2000]}"
-                read_urls.append(second_url)
+            p2_obj = index.pages.get(sa.normalize_url(second_url))
+            if p2_obj:
+                second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
+                if second_content:
+                    full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
+                    read_urls.append(second_url)
 
     context_block = (
         f"[PREFETCHED WEBSITE DATA — answer using this content]\n"
@@ -272,12 +271,12 @@ async def stream_answer(
                 "content": (
                     f"{user_query}\n\n"
                     f"{context_block}\n\n"
-                    "Answer using the prefetched website data above. "
-                    "If the prefetched data clearly answers the question, answer directly without calling any tools. "
-                    "Only call search_site or read_page if the prefetched data is clearly insufficient."
+                    "INSTRUCTIONS: Answer the user's question directly, factually, and concisely using only the prefetched data above. "
+                    "Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page. "
+                    "Output your final answer immediately."
                 ),
             }
-            yield sse("tool_call", name="search_site")
+            yield sse("tool_call", name="search_site") + f": {' ' * 1024}\n\n"
             yield sse("tool_output")
             yield sse("tool_call", name="read_page")
             yield sse("tool_output")
@@ -338,11 +337,11 @@ async def stream_answer(
             "error",
             message="The assistant took too many steps. Try a more specific question.",
         )
-    except Exception:
-        log.exception("chat stream failed")
+    except Exception as e:
+        log.exception(f"chat stream failed: {e}")
         yield sse(
             "error",
-            message="Something went wrong. Check that the model server is running.",
+            message=f"Something went wrong while generating answer: {e}",
         )
 
 
