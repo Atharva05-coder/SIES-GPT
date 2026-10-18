@@ -222,8 +222,8 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     else:
         page_content = index.read_page(top_url)
 
-    # Provide primary page text (up to 5,500 chars) so full committee lists, MoUs, and tables are preserved
-    full_content = page_content[:5500].strip()
+    # Provide primary page text (up to 4,000 chars) so full committee lists, MoUs, and tables are preserved
+    full_content = page_content[:4000].strip()
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
@@ -231,7 +231,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
         if second_url.rstrip("/") != top_url.rstrip("/"):
             p2_obj = index.pages.get(sa.normalize_url(second_url))
             if p2_obj:
-                second_content = "\n".join(p2_obj.get("lines", []))[:2500].strip()
+                second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
                 if second_content:
                     full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
                     read_urls.append(second_url)
@@ -241,7 +241,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
         if third_url.rstrip("/") not in [top_url.rstrip("/"), second_url.rstrip("/")]:
             p3_obj = index.pages.get(sa.normalize_url(third_url))
             if p3_obj:
-                third_content = "\n".join(p3_obj.get("lines", []))[:1500].strip()
+                third_content = "\n".join(p3_obj.get("lines", []))[:1000].strip()
                 if third_content:
                     full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
                     read_urls.append(third_url)
@@ -270,13 +270,22 @@ async def stream_answer(
             prefetch_site_context, index, user_query
         )
 
-        # Build augmented message list with prefetched context injected
-        augmented_messages = [m.model_dump() for m in messages]
+        # Prune conversation history to fit safely inside the model's 8,192 token limit.
+        # Keep at most the last 3 messages (1 previous user/assistant exchange + current message).
+        # Truncate any previous assistant message so old multi-thousand token syllabus dumps don't blow the context window.
+        recent_messages = messages[-3:] if len(messages) > 3 else messages
+        augmented_messages: list[dict[str, str]] = []
+        for m in recent_messages[:-1]:
+            content = m.content
+            if m.role == "assistant" and len(content) > 500:
+                content = content[:500] + "... [earlier response truncated]"
+            augmented_messages.append({"role": m.role, "content": content})
+
         if context_block:
             searches.append(searched_urls)
             reads.extend(read_urls)
             # Inject prefetched context into the last user message with clear formatting requirements
-            augmented_messages[-1] = {
+            augmented_messages.append({
                 "role": "user",
                 "content": (
                     f"{user_query}\n\n"
@@ -290,7 +299,11 @@ async def stream_answer(
                     "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
                     "7. Output your complete formatted response immediately."
                 ),
-            }
+            })
+        else:
+            augmented_messages.append({"role": "user", "content": user_query})
+
+        if context_block:
             yield sse("tool_call", name="search_site") + f": {' ' * 1024}\n\n"
             yield sse("tool_output")
             yield sse("tool_call", name="read_page") + f": {' ' * 1024}\n\n"
@@ -407,9 +420,18 @@ async def stream_pdf_answer(
     answer: list[str] = []
     pdf_sources: list[dict[str, str]] = []
     try:
+        recent_messages = messages[-3:] if len(messages) > 3 else messages
+        augmented_messages: list[dict[str, str]] = []
+        for m in recent_messages[:-1]:
+            content = m.content
+            if m.role == "assistant" and len(content) > 500:
+                content = content[:500] + "... [earlier response truncated]"
+            augmented_messages.append({"role": m.role, "content": content})
+        augmented_messages.append({"role": "user", "content": messages[-1].content})
+
         result = Runner.run_streamed(
             agent,
-            [m.model_dump() for m in messages],  # type: ignore
+            augmented_messages,  # type: ignore
             max_turns=6,
         )
         async for event in result.stream_events():

@@ -339,6 +339,12 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
         ref_text = ref_match.group(1).strip() if ref_match else ""
         online_text = online_match.group(1).strip() if online_match else ""
 
+        # Clean any trailing module table fragments or stray page footers
+        module_cut = r"(?im)^\s*(?:\d+\.\d+\b|Module\s+\d+|Total\s+\d+|Self-learning|CO\d+)"
+        tb_text = re.split(module_cut, tb_text)[0].strip()
+        ref_text = re.split(module_cut, ref_text)[0].strip()
+        online_text = re.split(module_cut, online_text)[0].strip()
+
         results = []
         if is_only_textbooks:
             if tb_text:
