@@ -167,7 +167,7 @@ def is_url_cited(url: str, answer: str) -> bool:
         return False
     if len(words) >= 2 and all(w in ans for w in words):
         return True
-    if any(len(w) > 4 and w in ans for w in words):
+    if any(len(w) >= 3 and w in ans for w in words):
         return True
     return False
 
@@ -222,8 +222,8 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     else:
         page_content = index.read_page(top_url)
 
-    # Keep primary context concise (up to 3000 chars) for instant, fast LLM generation
-    full_content = page_content[:3000].strip()
+    # Provide primary page text (up to 5,500 chars) so full committee lists, MoUs, and tables are preserved
+    full_content = page_content[:5500].strip()
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
@@ -231,16 +231,26 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
         if second_url.rstrip("/") != top_url.rstrip("/"):
             p2_obj = index.pages.get(sa.normalize_url(second_url))
             if p2_obj:
-                second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
+                second_content = "\n".join(p2_obj.get("lines", []))[:2500].strip()
                 if second_content:
                     full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
                     read_urls.append(second_url)
+
+    if len(searched_urls) > 2:
+        third_url = searched_urls[2]
+        if third_url.rstrip("/") not in [top_url.rstrip("/"), second_url.rstrip("/")]:
+            p3_obj = index.pages.get(sa.normalize_url(third_url))
+            if p3_obj:
+                third_content = "\n".join(p3_obj.get("lines", []))[:1500].strip()
+                if third_content:
+                    full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
+                    read_urls.append(third_url)
 
     context_block = (
         f"[PREFETCHED WEBSITE DATA — answer using this content]\n"
         f"Primary source: {top_url}\n"
         f"---\n{full_content}\n---\n"
-        f"Other pages found: {', '.join(searched_urls[1:3]) if len(searched_urls) > 1 else 'none'}"
+        f"Other pages found: {', '.join(searched_urls[1:4]) if len(searched_urls) > 1 else 'none'}"
     )
     return context_block, searched_urls, read_urls
 
@@ -265,29 +275,72 @@ async def stream_answer(
         if context_block:
             searches.append(searched_urls)
             reads.extend(read_urls)
-            # Inject prefetched context into the last user message
+            # Inject prefetched context into the last user message with clear formatting requirements
             augmented_messages[-1] = {
                 "role": "user",
                 "content": (
                     f"{user_query}\n\n"
                     f"{context_block}\n\n"
-                    "INSTRUCTIONS: Answer the user's question directly, factually, and concisely using only the prefetched data above. "
-                    "Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page. "
-                    "Output your final answer immediately."
+                    "INSTRUCTIONS:\n"
+                    "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked (e.g., if asked about a person/faculty/HOD, highlight their designation, roles, academic qualifications, experience, contact email, and institutional/committee appointments; if asked about a cell/committee, provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs).\n"
+                    "2. Avoid dumping unrelated sections or general college blurbs that do not directly answer the specific question.\n"
+                    "3. Use clean Markdown formatting: organize your response with clear section headings (e.g., ### Overview, ### Key Details, ### Objectives, ### Committee Members, ### Roles & Responsibilities), bold labels (`- **Field:** Value`), and bullet points.\n"
+                    "4. For committees or teams, clearly list the Coordinator/Head followed by the members with their respective designations or departments.\n"
+                    "5. Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page.\n"
+                    "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
+                    "7. Output your complete formatted response immediately."
                 ),
             }
             yield sse("tool_call", name="search_site") + f": {' ' * 1024}\n\n"
             yield sse("tool_output")
-            yield sse("tool_call", name="read_page")
+            yield sse("tool_call", name="read_page") + f": {' ' * 1024}\n\n"
             yield sse("tool_output")
         # ──────────────────────────────────────────────────────────────────────
 
-        result = Runner.run_streamed(
-            agent,
-            augmented_messages,  # type: ignore
-            max_turns=3,  # Only 1 LLM turn needed — data already prefetched
-        )
-        async for event in result.stream_events():
+        # Use an async queue with background keep-alive pinger so browser/proxy connection never times out during LLM generation
+        event_queue = asyncio.Queue()
+        stop_ping = asyncio.Event()
+
+        async def pinger():
+            try:
+                while not stop_ping.is_set():
+                    await asyncio.sleep(2.0)
+                    if not stop_ping.is_set():
+                        await event_queue.put(": keep-alive\n\n")
+            except asyncio.CancelledError:
+                pass
+
+        async def run_llm_stream():
+            try:
+                result = Runner.run_streamed(
+                    agent,
+                    augmented_messages,  # type: ignore
+                    max_turns=3,
+                )
+                async for event in result.stream_events():
+                    stop_ping.set()
+                    await event_queue.put(event)
+            except Exception as exc:
+                stop_ping.set()
+                await event_queue.put(exc)
+            finally:
+                stop_ping.set()
+                await event_queue.put(None)
+
+        ping_task = asyncio.create_task(pinger())
+        stream_task = asyncio.create_task(run_llm_stream())
+
+        while True:
+            item = await event_queue.get()
+            if item is None:
+                break
+            if isinstance(item, str):
+                yield item
+                continue
+            if isinstance(item, Exception):
+                raise item
+
+            event = item
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
                     answer.append(event.data.delta)
@@ -323,6 +376,9 @@ async def stream_answer(
                         if not any(s["url"] == url for s in pdf_sources):
                             pdf_sources.append({"url": url, "title": clean_title})
                     yield sse("tool_output")
+
+        ping_task.cancel()
+        await stream_task
 
         chosen = pick_sources("".join(answer), searches, reads)
         sources = [{"url": u, "title": source_title(index, u)} for u in chosen]
@@ -430,6 +486,37 @@ from agent import agent as intent_agent
 from agents import Runner
 
 
+_syllabus_courses_re: re.Pattern | None = None
+
+
+def get_syllabus_courses_regex() -> re.Pattern | None:
+    global _syllabus_courses_re
+    if _syllabus_courses_re is None:
+        try:
+            from rag.retriever import _course_sections
+            from rag.generator import extract_course_name_from_header
+
+            sections = _course_sections()
+            phrases: set[str] = set()
+            for s in sections:
+                code = s.get("code", "")
+                if code:
+                    phrases.add(re.escape(code.lower()))
+                header = s.get("header", "")
+                name = extract_course_name_from_header(header)
+                clean = re.sub(r"[\s\-]+(lab|laboratory)$", "", name, flags=re.I).strip()
+                clean = re.sub(r"^[^a-zA-Z]+", "", clean).strip()
+                clean = re.sub(r"\s+Program Outcomes.*", "", clean, flags=re.I).strip()
+                if len(clean) >= 4 and not clean.lower().startswith(("rtc", "esp", "hx7")):
+                    phrases.add(re.escape(clean.lower()))
+            if phrases:
+                pattern = r"\b(?:" + "|".join(sorted(phrases, key=len, reverse=True)) + r")\b"
+                _syllabus_courses_re = re.compile(pattern, re.IGNORECASE)
+        except Exception as e:
+            log.warning("Could not build dynamic syllabus courses regex: %s", e)
+    return _syllabus_courses_re
+
+
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
     r"exam|examination|scheme|internal assessment|ese|ise|ciap|esep|mse|practicals?|experiments?|"
@@ -445,8 +532,9 @@ FAST_SYLLABUS_RE = re.compile(
     r"machine\s*learning|soft\s*computing|system\s*programming|compiler\s*construction|"
     r"spcc|digital\s*forensics?|machine\s*vision|internet\s*of\s*things|iot|"
     r"natural\s*language\s*processing|nlp|cloud\s*computing|devops|"
-    r"applied\s*mathematics|engineering\s*economics|critical\s*thinking|"
-    r"applied\s*physics|applied\s*chemistry|engineering\s*graphics|"
+    r"robotics(\s*and\s*applications)?|sensor\s*technology|ethical\s*hacking|"
+    r"data\s*warehouse(\s*and\s*mining)?|applied\s*mathematics|engineering\s*economics|"
+    r"critical\s*thinking|applied\s*physics|applied\s*chemistry|engineering\s*graphics|"
     r"digital\s*system\s*design|dsd|basic\s*electrical|robot\s*dynamics|"
     r"c\s*programming|python\s*programming|web\s*technology)\b",
     re.IGNORECASE,
@@ -486,8 +574,9 @@ def fast_classify_intent(query: str) -> str | None:
     # 2. PDF documents, policies, brochures route to document
     if FAST_DOCUMENT_RE.search(query):
         return "document"
-    # 3. Courses, curriculum, syllabus, subjects route to syllabus
-    if FAST_SYLLABUS_RE.search(query):
+    # 3. Dynamic course catalog check or syllabus keywords route to syllabus
+    crgx = get_syllabus_courses_regex()
+    if (crgx and crgx.search(query)) or FAST_SYLLABUS_RE.search(query):
         return "syllabus"
     return None
 

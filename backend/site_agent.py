@@ -807,10 +807,15 @@ def build_agent(
 Today is {today}.
 
 Rules:
-1. When prefetched website data is provided in the prompt, answer directly, factually, and concisely using that content. Do NOT call search_site or read_page if the prefetched data answers the question.
-2. If no data is provided or the prefetched data is clearly missing the topic, use search_site to find candidate URLs and read_page to inspect them.
-3. CRITICAL: Do NOT use internal thinking or reasoning steps. Output your answer immediately, concisely, and factually.
-4. Do not include URLs or a 'Sources' section in your answer text (the interface renders source links separately)."""),
+1. Provide comprehensive, detailed, and well-structured answers using official website content. Do NOT abbreviate, summarize away, or omit key information (such as complete lists of committee members, coordinators, designations, objectives, roles, partnerships/MoUs, qualifications, and experience).
+2. Format your response cleanly using standard Markdown:
+   - Use clear section headings (e.g., ### Overview, ### Objectives, ### Committee Members, ### Key Details, ### Roles & Responsibilities, ### Collaborations & MoUs).
+   - Use structured bullet points (`- **Field:** Value`) for lists and attributes.
+   - For committees or teams, clearly present the Coordinator/Head followed by all members with their designations.
+3. When prefetched website data is provided in the prompt, answer directly and factually using that content. Do NOT call search_site or read_page if the prefetched data answers the question.
+4. If no data is provided or the prefetched data is missing the topic, use search_site to find candidate URLs and read_page to inspect them.
+5. CRITICAL: Do NOT use internal thinking or reasoning steps. Output your formatted answer directly.
+6. Do not include URLs or a 'Sources' section in your answer text (the interface renders source links separately)."""),
         model=model,
         model_settings=ModelSettings(temperature=0.0),
         tools=[
