@@ -506,43 +506,7 @@ def extract_course_name_from_header(header: str) -> str:
     return clean
 
 
-def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
-    if not retrieved_chunks:
-        return None
-
-    is_info_query = bool(
-        re.search(r"\b(information|informatin|info|details?|overview|summary|about|explain the course|explain the lab|tell me about)\b", query, re.IGNORECASE)
-        or re.search(r"^(?:what is|details? of|info on|explain)\s+[A-Za-z0-9\s-]+\??$", query.strip(), re.IGNORECASE)
-    )
-    if not is_info_query:
-        return None
-
-    if re.search(r"\b(program structure|curriculum structure|electives?|minors?|mdms?|credit distribution|semester-?wise credit|how many credits)\b", query, re.IGNORECASE):
-        return None
-    if re.search(r"\b(?:only\s+)?(textbooks?|reference books?|references?)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
-        return None
-    if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
-        return None
-    if re.search(r"\b(syllabus|curriculum|module\s+\d+)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
-        return None
-
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
-    sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
-
-    if not target_code or target_code not in sections:
-        return None
-
-    section = sections[target_code]
+def build_course_full_markdown(target_code: str, section: dict, sections: dict) -> str:
     p1_text = section["all_pages"][0]["text"]
     course_name = extract_course_name_from_header(section["header"])
     text_clean = re.sub(rf"\b{re.escape(target_code)}\b", "", p1_text)
@@ -606,6 +570,8 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
             prereq = "; ".join(pr_lines)
     if not prereq or prereq.lower() in ["nil", "none", "-", "--", "na", "not applicable"]:
         prereq = "Nil"
+    else:
+        prereq = re.sub(r"^[:\s]+", "", prereq).strip()
 
     # 4. Program Outcomes Addressed
     pos = []
@@ -707,6 +673,95 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     return "\n".join(res_lines).strip()
 
 
+def find_paired_course(code: str, name: str, is_target_lab: bool, sections: dict) -> tuple[str, str] | None:
+    clean_n = re.sub(r"[\s\-]+(lab|laboratory)$", "", name, flags=re.I).strip()
+    for other_code, other_sec in sections.items():
+        if other_code == code:
+            continue
+        other_name = extract_course_name_from_header(other_sec["header"])
+        other_clean = re.sub(r"[\s\-]+(lab|laboratory)$", "", other_name, flags=re.I).strip()
+        other_is_lab = bool(re.search(r"\blab\b", other_name, re.I) or other_code.startswith("CEL") or other_code.startswith("FEL") or other_code.startswith("CEPEL") or other_code.startswith("MDML"))
+        if other_is_lab != is_target_lab:
+            c1 = clean_n.rstrip("s").lower()
+            c2 = other_clean.rstrip("s").lower()
+            if c1 == c2 or (len(c1) > 5 and (c1 in c2 or c2 in c1)):
+                return other_code, other_name
+    return None
+
+
+def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+
+    if re.search(r"\b(program structure|curriculum structure|electives?|minors?|mdms?|credit distribution|semester-?wise credit|how many credits)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:only\s+)?(textbooks?|reference books?|references?)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(syllabus|curriculum|module\s+\d+)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+        return None
+
+    target_code = None
+    for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    if not target_code or target_code not in sections:
+        return None
+
+    section = sections[target_code]
+    course_name = extract_course_name_from_header(section["header"])
+
+    # Determine if this query is asking about this course
+    clean_q = query.strip()
+    clean_course_name = re.sub(r"[\s\-]+(lab|laboratory)$", "", course_name, flags=re.I).strip()
+    is_course_name_query = bool(
+        clean_q.lower() == target_code.lower()
+        or clean_q.lower() == course_name.lower()
+        or clean_q.lower() == clean_course_name.lower()
+        or clean_q.lower().rstrip("s") in course_name.lower().rstrip("s")
+        or course_name.lower().rstrip("s") in clean_q.lower().rstrip("s")
+        or re.search(rf"\b{re.escape(target_code)}\b", clean_q, re.I)
+        or re.search(rf"\b{re.escape(clean_course_name)}\b", clean_q, re.I)
+    )
+
+    is_info_query = bool(
+        is_course_name_query
+        or re.search(r"\b(information|informatin|info|details?|overview|summary|about|explain the course|explain the lab|tell me about|give|what is)\b", query, re.IGNORECASE)
+        or re.search(r"^(?:what is|details? of|info on|explain|give)\s+[A-Za-z0-9\s-]+\??$", clean_q, re.IGNORECASE)
+    )
+    if not is_info_query:
+        return None
+
+    is_lab = bool(re.search(r"\blab\b", course_name, re.I) or target_code.startswith("CEL") or target_code.startswith("FEL") or target_code.startswith("CEPEL") or target_code.startswith("MDML"))
+    wants_both = bool(re.search(r"\b(subject\s+and\s+lab|lab\s+and\s+subject|theory\s+and\s+lab|both)\b", query, re.IGNORECASE))
+
+    main_text = build_course_full_markdown(target_code, section, sections)
+    paired = find_paired_course(target_code, course_name, is_lab, sections)
+
+    if wants_both and paired:
+        paired_code, paired_name = paired
+        if paired_code in sections:
+            paired_text = build_course_full_markdown(paired_code, sections[paired_code], sections)
+            return f"{main_text}\n\n---\n\n{paired_text}"
+
+    if paired:
+        paired_code, paired_name = paired
+        label_kind = "theory course" if is_lab else "laboratory course"
+        main_text += f"\n\n---\n*Note: For the associated {label_kind}, see **{paired_code}: {paired_name}**.*"
+
+    return main_text
+
+
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
 
     def early_return(ret_text):
@@ -716,7 +771,8 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
                 yield_callback({"type": "token", "text": tok})
         return ret_text
 
-    check_query = original_question if original_question else question
+    from rag.query_rewriter import reframe_query
+    check_query = reframe_query(original_question if original_question else question)
 
     # Fast deterministic extractors (0.005s execution)
     fast_outline = extract_course_module_outline(check_query, retrieved_chunks)

@@ -157,11 +157,26 @@ def dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def is_url_cited(url: str, answer: str) -> bool:
+    ans = answer.lower()
+    if url.lower() in ans:
+        return True
+    slug = url.rstrip("/").split("/")[-1].replace("-", " ").lower()
+    words = [w for w in slug.split() if w not in {"faculty", "content", "about", "images", "committee", "gstcontent"}]
+    if not words:
+        return False
+    if len(words) >= 2 and all(w in ans for w in words):
+        return True
+    if any(len(w) > 4 and w in ans for w in words):
+        return True
+    return False
+
+
 def pick_sources(answer: str, searches: list[list[str]], reads: list[str]) -> list[str]:
     """Prefer pages the answer mentions; otherwise pages the agent read in full,
     then the top results of each search."""
     retrieved = dedupe([u for hits in searches for u in hits])
-    cited = [u for u in dedupe(reads + retrieved) if u in answer]
+    cited = [u for u in dedupe(reads + retrieved) if is_url_cited(u, answer)]
     fallback = dedupe(reads + [u for hits in searches for u in hits[:PER_SEARCH]])
     return (cited or fallback)[:MAX_SOURCES]
 
@@ -177,6 +192,61 @@ def sse(event_type: str, **data: Any) -> str:
     return f"data: {json.dumps({'type': event_type, **data})}\n\n"
 
 
+def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[str], list[str]]:
+    """
+    Guarantee read_page is called by doing it in Python before the LLM runs.
+
+    Returns:
+        context_block  – formatted text to inject into the user message
+        searched_urls  – list of URLs returned by search
+        read_urls      – list of URLs whose full content was read
+    """
+    hits = index.search(query)
+    if not hits:
+        return "", [], []
+
+    searched_urls: list[str] = []
+    seen: set[str] = set()
+    for h in hits:
+        u = h["url"]
+        if u not in seen:
+            seen.add(u)
+            searched_urls.append(u)
+
+    # Always read the top-ranked URL in full
+    top_url = searched_urls[0]
+    page_content = index.read_page(top_url)
+
+    # If content is truncated, read the second chunk too
+    extra = ""
+    if "[Truncated." in page_content:
+        extra = index.read_page(top_url, offset=sa.READ_PAGE_CHARS)
+        if extra == "No more content.":
+            extra = ""
+
+    full_content = (page_content + ("\n" + extra if extra else "")).strip()
+
+    # Also read second URL if it looks like a more specific page (profile/detail)
+    read_urls = [top_url]
+    if len(searched_urls) > 1:
+        second_url = searched_urls[1]
+        # Heuristic: read second page if it's a sub-path (more specific)
+        if second_url.rstrip("/") != top_url.rstrip("/"):
+            second_content = index.read_page(second_url)
+            if second_content and "Page not found" not in second_content:
+                full_content += f"\n\n--- Additional page: {second_url} ---\n{second_content[:2000]}"
+                read_urls.append(second_url)
+
+    context_block = (
+        f"[PREFETCHED WEBSITE DATA — answer using this content]\n"
+        f"Primary source: {top_url}\n"
+        f"---\n{full_content}\n---\n"
+        f"Other pages found: {', '.join(searched_urls[1:3]) if len(searched_urls) > 1 else 'none'}"
+    )
+    return context_block, searched_urls, read_urls
+
+
+
 async def stream_answer(
     agent: Any, index: sa.SiteIndex, messages: list[Msg]
 ) -> AsyncIterator[str]:
@@ -185,10 +255,38 @@ async def stream_answer(
     reads: list[str] = []
     pdf_sources: list[dict[str, str]] = []
     try:
+        # ── Pre-fetch: guaranteed search + read_page before LLM runs ──────────
+        user_query = messages[-1].content
+        context_block, searched_urls, read_urls = await asyncio.to_thread(
+            prefetch_site_context, index, user_query
+        )
+
+        # Build augmented message list with prefetched context injected
+        augmented_messages = [m.model_dump() for m in messages]
+        if context_block:
+            searches.append(searched_urls)
+            reads.extend(read_urls)
+            # Inject prefetched context into the last user message
+            augmented_messages[-1] = {
+                "role": "user",
+                "content": (
+                    f"{user_query}\n\n"
+                    f"{context_block}\n\n"
+                    "Answer using the prefetched website data above. "
+                    "If the prefetched data clearly answers the question, answer directly without calling any tools. "
+                    "Only call search_site or read_page if the prefetched data is clearly insufficient."
+                ),
+            }
+            yield sse("tool_call", name="search_site")
+            yield sse("tool_output")
+            yield sse("tool_call", name="read_page")
+            yield sse("tool_output")
+        # ──────────────────────────────────────────────────────────────────────
+
         result = Runner.run_streamed(
             agent,
-            [m.model_dump() for m in messages],  # type: ignore
-            max_turns=sa.MAX_TURNS,
+            augmented_messages,  # type: ignore
+            max_turns=3,  # Only 1 LLM turn needed — data already prefetched
         )
         async for event in result.stream_events():
             if event.type == "raw_response_event":
@@ -336,9 +434,22 @@ from agents import Runner
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
     r"exam|examination|scheme|internal assessment|ese|ise|ciap|esep|mse|practicals?|experiments?|"
-    r"labs?|textbooks?|references?|minors?|mdm|electives?|pep?|oec?|hours?|teaching scheme|"
-    r"unit\s*\d+|topics?|outcomes?|los?|cos?)\b"
-    r"|\b(?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CSC|CSL|ITC|ITL|AIDS|AIML)\d{2,4}[A-Z0-9/]*\b",
+    r"labs?|textbooks?|references?|minors?|mdm|electives?|pep|oec|hours?|teaching scheme|"
+    r"unit\s*\d+|topics?|outcomes?|course\s*outcome|program\s*outcome|los|cos)\b"
+    # Course codes must have a recognised 3-letter+ prefix followed by digits
+    r"|\b(?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CSC|CSL|ITC|ITL|AIDS|AIML)\d{2,4}[A-Z0-9/]*\b"
+    # Common academic subjects & syllabus courses
+    r"|\b(?:computer\s*networks?|theoretical\s*computer\s*science|tcs|data\s*structures?|"
+    r"discrete\s*structures?|graph\s*theory|database\s*management|dbms|"
+    r"computer\s*organization|operating\s*systems?|analysis\s*of\s*algorithms?|aoa|"
+    r"software\s*engineering|cryptography|network\s*security|artificial\s*intelligence|"
+    r"machine\s*learning|soft\s*computing|system\s*programming|compiler\s*construction|"
+    r"spcc|digital\s*forensics?|machine\s*vision|internet\s*of\s*things|iot|"
+    r"natural\s*language\s*processing|nlp|cloud\s*computing|devops|"
+    r"applied\s*mathematics|engineering\s*economics|critical\s*thinking|"
+    r"applied\s*physics|applied\s*chemistry|engineering\s*graphics|"
+    r"digital\s*system\s*design|dsd|basic\s*electrical|robot\s*dynamics|"
+    r"c\s*programming|python\s*programming|web\s*technology)\b",
     re.IGNORECASE,
 )
 
@@ -353,18 +464,32 @@ FAST_WEBSITE_RE = re.compile(
     r"\b(who\s+is|who\s+was|who\s+are|dr\.?|ms\.?|mr\.?|prof\.?|faculty|teacher|prof|professor|hod|principal|dean|admissions?|fees?|placements?|"
     r"packages?|highest package|average package|companies|recruiters|campus|canteen|library|"
     r"hostel|events?|fest|rotaract|student council|contact|address|location|reach|bus|train|"
-    r"railway|concession|documents? required|eligibility criteria)\b",
+    r"railway|concession|documents? required|eligibility criteria|"
+    # SIES GST institutional cells, committees, and bodies
+    r"IIIC|iiic|innovation.*incubation|incubation.*cell|"
+    r"iste|nss|cultural committee|sports committee|"
+    r"tpc|training.*placement|placement.*cell|"
+    r"grievance|anti.?ragging committee|posh|"
+    r"iqac|internal quality|cdc|career development|"
+    r"alumni|entrepreneurship|e.?cell|"
+    r"ieee|csi|acm|technical committee|"
+    r"research committee|r&d|wep|women|gender|"
+    r"mentoring|mentor|welfare|scholarship|"
+    r"committee|cell|council|club|association|society|chapter)\b",
     re.IGNORECASE,
 )
 
 
 def fast_classify_intent(query: str) -> str | None:
-    if FAST_SYLLABUS_RE.search(query):
-        return "syllabus"
-    if FAST_DOCUMENT_RE.search(query):
-        return "document"
+    # 1. Institutional cells, committees, faculty, HOD, campus always route to website
     if FAST_WEBSITE_RE.search(query):
         return "website"
+    # 2. PDF documents, policies, brochures route to document
+    if FAST_DOCUMENT_RE.search(query):
+        return "document"
+    # 3. Courses, curriculum, syllabus, subjects route to syllabus
+    if FAST_SYLLABUS_RE.search(query):
+        return "syllabus"
     return None
 
 

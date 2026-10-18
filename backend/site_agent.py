@@ -640,8 +640,27 @@ class SiteIndex:
         query: str,
         k: int = TOP_K,
     ) -> list[dict]:
+        clean_query = query
+        expansions = {
+            r"\bhod\b": "hod head of department",
+            r"\bce\b": "ce computer engineering",
+            r"\bit\b": "it information technology",
+            r"\bextc\b": "extc electronics telecommunication",
+            r"\becs\b": "ecs electronics computer science",
+            r"\baids\b": "aids artificial intelligence data science",
+            r"\baiml\b": "aiml artificial intelligence machine learning",
+            r"\bmech\b": "mech mechanical engineering",
+            r"\bppt\b": "ppt printing packaging technology",
+            r"\bdept\b": "department",
+            r"\bcompter\b": "computer",
+            r"\biiic\b": "iiic innovation incubation industry interface cell",
+            r"\biqac\b": "iqac internal quality assurance cell",
+            r"\btpc\b": "tpc training placement cell",
+        }
+        for p, repl in expansions.items():
+            clean_query = re.sub(p, repl, clean_query, flags=re.IGNORECASE)
 
-        query_tokens = tokenize(query)
+        query_tokens = tokenize(clean_query)
 
         if not query_tokens:
             return []
@@ -652,23 +671,27 @@ class SiteIndex:
 
         top_score = max(scores) or 1.0
 
-        ranked = [
-            (
+        ranked = []
+        for index, (score, metadata) in enumerate(zip(scores, self.meta)):
+            chunk = self.chunks[index]
+            url = chunk["url"].lower()
+            slug = url.rstrip("/").split("/")[-1]
+
+            dept_boost = 0.0
+            if "committee" in url:
+                dept_boost -= 0.25  # De-prioritize raw committee spreadsheets
+            if any(w in slug for w in ["computer-engineering", "information-technology", "electronics-telecommunication", "mechanical", "artificial-intelligence"]):
+                if any(w in query_set for w in ["computer", "engineering", "it", "information", "extc", "electronics", "aids"]):
+                    dept_boost += 0.5
+            if "faculty" in url and any(w in query_set for w in ["hod", "head", "faculty", "professor", "dr"]):
+                dept_boost += 0.35
+
+            final_score = (
                 score / top_score
-                + META_BOOST * len(query_set & metadata) / len(query_set),
-                score,
-                index,
+                + META_BOOST * len(query_set & metadata) / len(query_set)
+                + dept_boost
             )
-            for index, (
-                score,
-                metadata,
-            ) in enumerate(
-                zip(
-                    scores,
-                    self.meta,
-                )
-            )
-        ]
+            ranked.append((final_score, score, index))
 
         ranked.sort(reverse=True)
 
