@@ -656,6 +656,7 @@ class SiteIndex:
             r"\biiic\b": "iiic innovation incubation industry interface cell",
             r"\biqac\b": "iqac internal quality assurance cell",
             r"\btpc\b": "tpc training placement cell",
+            r"\b(?:programs?|courses?\s+offered|branches|degrees?)\b": "programs courses undergraduate postgraduate btech b.e mtech engineering intake",
         }
         for p, repl in expansions.items():
             clean_query = re.sub(p, repl, clean_query, flags=re.IGNORECASE)
@@ -671,6 +672,14 @@ class SiteIndex:
 
         top_score = max(scores) or 1.0
 
+        is_program_query = bool(
+            re.search(
+                r"\b(courses?\s+offered|programs?\s+(?:offered|available)|what\s+are\s+programs|branches|degrees|intake|ug\s+and\s+pg|undergraduate|postgraduate|courses?\s+in\s+sies|programs?\s+in\s+sies)\b",
+                query,
+                re.IGNORECASE,
+            )
+        )
+
         ranked = []
         for index, (score, metadata) in enumerate(zip(scores, self.meta)):
             chunk = self.chunks[index]
@@ -685,6 +694,12 @@ class SiteIndex:
                     dept_boost += 0.5
             if "faculty" in url and any(w in query_set for w in ["hod", "head", "faculty", "professor", "dr"]):
                 dept_boost += 0.35
+
+            if is_program_query:
+                if any(u in url for u in ["about-sies-gst", "first-year-engineering", "admissions-ug-engineering", "admissions-pg-engineering", "workingprof"]):
+                    dept_boost += 1.8
+                if any(u in url for u in ["nisp", "preincubation", "faculty", "committee"]):
+                    dept_boost -= 1.5
 
             final_score = (
                 score / top_score
@@ -809,8 +824,13 @@ Today is {today}.
 Rules:
 1. Provide comprehensive, detailed, and well-structured answers using official website content. Do NOT abbreviate, summarize away, or omit key information (such as complete lists of committee members, coordinators, designations, objectives, roles, partnerships/MoUs, qualifications, and experience).
 2. Format your response cleanly using standard Markdown:
-   - Use clear section headings (e.g., ### Overview, ### Objectives, ### Committee Members, ### Key Details, ### Roles & Responsibilities, ### Collaborations & MoUs).
-   - Use structured bullet points (`- **Field:** Value`) for lists and attributes.
+   - Use clear section headings (e.g., ### Overview, ### Programs Offered, ### Objectives, ### Committee Members, ### Key Details, ### Roles & Responsibilities, ### Collaborations & MoUs).
+   - Use structured bullet points (`- **Field:** Value`) or markdown tables for lists, attributes, intakes, and programs.
+   - For questions about courses, branches, or programs offered at SIES GST, provide the complete, detailed breakdown:
+     * **Undergraduate (B.Tech - 4 Years):** List all engineering branches along with their intake (e.g., Computer Engineering - 180, IT - 120, AI & DS - 120, AI & ML - 60, ECS - 60, EXTC - 60, CSE IoT & Cyber Security including Blockchain - 60, Mechanical - 60).
+     * **Postgraduate (M.Tech - 2 Years):** AI & Data Science (18), Information Security (18).
+     * **Working Professionals (B.Tech - 3 Years):** AI & DS (30), Computer Engineering (30), IT (30).
+     * **Doctoral (Ph.D.):** Ph.D. in Computer Engineering.
    - For committees or teams, clearly present the Coordinator/Head followed by all members with their designations.
 3. When prefetched website data is provided in the prompt, answer directly and factually using that content. Do NOT call search_site or read_page if the prefetched data answers the question.
 4. If no data is provided or the prefetched data is missing the topic, use search_site to find candidate URLs and read_page to inspect them.

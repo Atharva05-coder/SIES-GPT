@@ -574,6 +574,14 @@ FAST_WEBSITE_RE = re.compile(
     r"packages?|highest package|average package|companies|recruiters|campus|canteen|library|"
     r"hostel|events?|fest|rotaract|student council|contact|address|location|reach|bus|train|"
     r"railway|concession|documents? required|eligibility criteria|"
+    # College-wide degree programs, branches, courses offered
+    r"courses?\s+offered|programs?\s+offered|degrees?\s+offered|branches?\s+offered|"
+    r"courses?\s+available|programs?\s+available|degrees?\s+available|branches?\s+available|"
+    r"what\s+(?:are\s+the\s+)?(?:courses|programs|degrees|branches)\b|"
+    r"(?:courses|programs|branches|degrees)\s+(?:in|at|of)\b|"
+    r"undergraduate\s+programs?|postgraduate\s+programs?|ug\s+programs?|pg\s+programs?|"
+    r"ug\s+courses?|pg\s+courses?|b\.?tech\s+courses?|b\.?e\.?\s+courses?|"
+    r"branches\b|departments\b|intake\b|seats?\s+available\b|"
     # SIES GST institutional cells, committees, and bodies
     r"IIIC|iiic|innovation.*incubation|incubation.*cell|"
     r"iste|nss|cultural committee|sports committee|"
