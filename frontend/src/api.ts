@@ -8,15 +8,34 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
   return (await res.json()) as Health;
 }
 
+export async function cancelChat(requestId: string): Promise<void> {
+  if (!requestId) return;
+  try {
+    await fetch(`${BASE}/api/chat/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId }),
+    });
+  } catch (e) {
+    console.debug("Cancel request failed:", e);
+  }
+}
+
 export async function streamChat(
   messages: { role: Role; content: string }[],
   onEvent: (event: StreamEvent) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  requestId?: string,
 ): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (requestId) {
+    headers["X-Request-ID"] = requestId;
+  }
+
   const res = await fetch(`${BASE}/api/smart_chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    headers,
+    body: JSON.stringify({ messages, request_id: requestId }),
     signal,
   });
 

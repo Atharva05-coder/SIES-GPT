@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from "react";
-import { streamChat } from "../api";
+import { cancelChat, streamChat } from "../api";
 import type { ChatMessage, StreamEvent } from "../types";
 
 export type ChatSession = {
@@ -39,6 +39,7 @@ export function useChat() {
   const [activeChatId, setActiveChatId] = useState<string | null>(() => localStorage.getItem(ACTIVE_CHAT_KEY));
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -147,6 +148,9 @@ export function useChat() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const reqId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      currentRequestIdRef.current = reqId;
+
       const reqStartTime = performance.now();
       let clientFirstTokenTime: number | null = null;
       let clientTokenCount = 0;
@@ -190,7 +194,7 @@ export function useChat() {
       };
 
       try {
-        await streamChat(history, onEvent, controller.signal);
+        await streamChat(history, onEvent, controller.signal, reqId);
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === "AbortError";
         if (!aborted) {
@@ -198,6 +202,7 @@ export function useChat() {
           patchLast((m) => ({ ...m, error: message }));
         }
       } finally {
+        currentRequestIdRef.current = null;
         patchLast((m) => {
           if (!m.benchmark && m.content) {
             const elapsed = Number(((performance.now() - reqStartTime) / 1000).toFixed(2));
@@ -225,7 +230,13 @@ export function useChat() {
     [chats, activeChatId, busy, patchLast, createNewChat],
   );
 
-  const stop = useCallback(() => abortRef.current?.abort(), []);
+  const stop = useCallback(() => {
+    const activeReqId = currentRequestIdRef.current;
+    if (activeReqId) {
+      cancelChat(activeReqId);
+    }
+    abortRef.current?.abort();
+  }, []);
 
   const clear = useCallback(() => {
     if (activeChatId) {
