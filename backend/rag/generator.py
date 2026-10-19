@@ -730,14 +730,31 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     # Determine if this query is asking about this course
     clean_q = query.strip()
     clean_course_name = re.sub(r"[\s\-]+(lab|laboratory)$", "", course_name, flags=re.I).strip()
+
+    def norm_name(s: str) -> str:
+        s = s.lower().strip()
+        s = re.sub(r"[\s\-–_]+", " ", s)
+        return s.strip()
+
+    norm_q = norm_name(clean_q)
+    norm_cname = norm_name(course_name)
+    norm_clean_cname = norm_name(clean_course_name)
+
     is_course_name_query = bool(
         clean_q.lower() == target_code.lower()
         or clean_q.lower() == course_name.lower()
         or clean_q.lower() == clean_course_name.lower()
+        or norm_q == norm_cname
+        or norm_q == norm_clean_cname
+        or norm_q.rstrip("s") in norm_cname.rstrip("s")
+        or norm_cname.rstrip("s") in norm_q.rstrip("s")
+        or norm_clean_cname.rstrip("s") in norm_q.rstrip("s")
+        or norm_q.rstrip("s") in norm_clean_cname.rstrip("s")
         or clean_q.lower().rstrip("s") in course_name.lower().rstrip("s")
         or course_name.lower().rstrip("s") in clean_q.lower().rstrip("s")
         or re.search(rf"\b{re.escape(target_code)}\b", clean_q, re.I)
         or re.search(rf"\b{re.escape(clean_course_name)}\b", clean_q, re.I)
+        or (len(norm_clean_cname) >= 3 and re.search(rf"\b{re.escape(norm_clean_cname)}\b", norm_q, re.I))
     )
 
     is_info_query = bool(

@@ -656,7 +656,7 @@ class SiteIndex:
             r"\biiic\b": "iiic innovation incubation industry interface cell",
             r"\biqac\b": "iqac internal quality assurance cell",
             r"\btpc\b": "tpc training placement cell",
-            r"\b(?:programs?|courses?\s+offered|branches|degrees?)\b": "programs courses undergraduate postgraduate btech b.e mtech engineering intake",
+            r"\b(?:programs?|courses?(?:\s+(?:offered|available|in\s+sies|in\s+siesgst))?|branches|degrees?)\b": "programs courses undergraduate postgraduate btech b.e mtech engineering intake",
         }
         for p, repl in expansions.items():
             clean_query = re.sub(p, repl, clean_query, flags=re.IGNORECASE)
@@ -674,7 +674,7 @@ class SiteIndex:
 
         is_program_query = bool(
             re.search(
-                r"\b(courses?\s+offered|programs?\s+(?:offered|available)|what\s+are\s+programs|branches|degrees|intake|ug\s+and\s+pg|undergraduate|postgraduate|courses?\s+in\s+sies|programs?\s+in\s+sies)\b",
+                r"\b(courses?\s+(?:offered|available|in|at)|programs?\s+(?:offered|available|in|at)|what\s+are\s+(?:the\s+)?(?:programs|courses)|branches|degrees|intake|ug\s+and\s+pg|undergraduate|postgraduate|courses?\s+in\s+sies|programs?\s+in\s+sies)\b",
                 query,
                 re.IGNORECASE,
             )

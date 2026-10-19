@@ -10,7 +10,8 @@ Environment variables (all optional):
 """
 
 from __future__ import annotations
-
+import queue
+import threading
 import asyncio
 import hmac
 import json
@@ -408,6 +409,15 @@ async def stream_answer(
             finally:
                 stop_ping.set()
                 await event_queue.put(None)
+
+        async def pinger():
+            try:
+                while not stop_ping.is_set():
+                    await asyncio.sleep(2.0)
+                    if not stop_ping.is_set():
+                        await event_queue.put(": keep-alive\n\n")
+            except asyncio.CancelledError:
+                pass
 
         ping_task = asyncio.create_task(pinger())
         stream_task = asyncio.create_task(run_llm_stream())
@@ -884,8 +894,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
 
                 from rag.rag_pipeline import ask_sies_gpt
-                import queue
-                import threading
+              
 
                 q = queue.Queue()
 

@@ -29,6 +29,24 @@ SEMESTER_RANGE = re.compile(
     rf"\b(?:semesters?|sems?)\s*({SEMESTER_TOKEN})\s*(?:-|to|through)\s*({SEMESTER_TOKEN})\b",
     re.IGNORECASE,
 )
+NUM_TO_ROMAN = {
+    "1": "i", "2": "ii", "3": "iii", "4": "iv",
+    "5": "v", "6": "vi", "7": "vii", "8": "viii",
+    "i": "i", "ii": "ii", "iii": "iii", "iv": "iv",
+    "v": "v", "vi": "vi", "vii": "vii", "viii": "viii",
+}
+
+
+def extract_course_name_from_header(header: str) -> str:
+    m = re.search(r"(\d{1,3}\s+(?:\d{1,3}|--|-)|--\s+\d{1,2}|\b\d{1,2}\b(?:\s*[\*\+]\s*\d+)?\s*(?:--|-|\d))", header)
+    if m:
+        raw_name = header[:m.start()]
+    else:
+        lines = [l.strip() for l in header.split("\n") if l.strip()]
+        raw_name = " ".join(lines[:3])
+    clean = re.sub(r"\s+", " ", raw_name).strip()
+    clean = re.sub(r"[\s\d\-–]+$", "", clean).strip()
+    return clean
 STOP_WORDS = {
     "a",
     "about",
@@ -427,7 +445,20 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         score += len(module_overlap) * 1.5
         if code_match:
             score += 100.0
-        
+
+        # Check course level / roman numerals (e.g. Mathematics-III vs Mathematics-IV)
+        cname = extract_course_name_from_header(section["header"])
+        cname_tokens = set(_tokenize(cname))
+        cname_levels = {NUM_TO_ROMAN[t] for t in cname_tokens if t in NUM_TO_ROMAN}
+        query_levels = {NUM_TO_ROMAN[t] for t in query_tokens if t in NUM_TO_ROMAN}
+        if query_levels and cname_levels:
+            if query_levels == cname_levels:
+                score += 35.0
+            else:
+                score -= 50.0
+        elif query_levels and not cname_levels:
+            score -= 10.0
+
         distinguishing_words = {"advanced", "advance", "intro", "introduction", "basics", "basic", "applied", "application", "fundamentals", "principles", "design"}
         extra_distinguishing = (title_tokens & distinguishing_words) - query_tokens
         if extra_distinguishing:
