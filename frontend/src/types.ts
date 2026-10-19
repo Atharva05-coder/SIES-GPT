@@ -5,14 +5,6 @@ export interface Source {
   title: string;
 }
 
-export interface Benchmark {
-  totalTime: number;
-  ttft?: number;
-  tokens?: number;
-  tokensPerSecond?: number;
-  route?: string;
-}
-
 export interface ChatMessage {
   id: string;
   role: Role;
@@ -21,7 +13,6 @@ export interface ChatMessage {
   status?: string;
   error?: string;
   streaming?: boolean;
-  benchmark?: Benchmark;
 }
 
 export type StreamEvent =
@@ -30,15 +21,7 @@ export type StreamEvent =
   | { type: "tool_output" }
   | { type: "sources"; sources: Source[] }
   | { type: "done" }
-  | { type: "error"; message: string }
-  | {
-      type: "benchmark";
-      total_time?: number;
-      ttft?: number;
-      tokens?: number;
-      tokens_per_sec?: number;
-      route?: string;
-    };
+  | { type: "error"; message: string };
 
 export interface Health {
   ready: boolean;

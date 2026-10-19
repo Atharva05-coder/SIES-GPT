@@ -265,6 +265,32 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     return context_block, searched_urls, read_urls
 
 
+def log_terminal_benchmark(
+    query: str, route: str, total_time: float, ttft: float, tokens: int, tok_per_sec: float
+) -> None:
+    sep = "=" * 62
+    summary = (
+        f"\n{sep}\n"
+        f"📊 [BENCHMARK] Response Generated\n"
+        f" Query      : {query}\n"
+        f" Route      : {route}\n"
+        f" Latency    : {total_time:.2f}s\n"
+        f" TTFT       : {ttft:.2f}s\n"
+        f" Tokens     : {tokens}\n"
+        f" Speed      : {tok_per_sec:.1f} tok/s\n"
+        f"{sep}\n"
+    )
+    print(summary, flush=True)
+    log.info(
+        "Benchmark: Query='%s' | Route='%s' | Total=%.2fs | TTFT=%.2fs | Tokens=%d | Speed=%.1f tok/s",
+        query,
+        route,
+        total_time,
+        ttft,
+        tokens,
+        tok_per_sec,
+    )
+
 
 async def stream_answer(
     agent: Any,
@@ -463,13 +489,13 @@ async def stream_answer(
         ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
         gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
         tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
-        yield sse(
-            "benchmark",
+        log_terminal_benchmark(
+            query=user_query,
+            route="Website Agent",
             total_time=total_time,
             ttft=ttft,
             tokens=token_count,
-            tokens_per_sec=tok_per_sec,
-            route="Website Agent",
+            tok_per_sec=tok_per_sec,
         )
         yield sse("done")
     except (asyncio.CancelledError, GeneratorExit):
@@ -573,13 +599,14 @@ async def stream_pdf_answer(
         ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
         gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
         tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
-        yield sse(
-            "benchmark",
+        user_query = messages[-1].content
+        log_terminal_benchmark(
+            query=user_query,
+            route="PDF Documents",
             total_time=total_time,
             ttft=ttft,
             tokens=token_count,
-            tokens_per_sec=tok_per_sec,
-            route="PDF Documents",
+            tok_per_sec=tok_per_sec,
         )
         yield sse("done")
     except (asyncio.CancelledError, GeneratorExit):
@@ -935,13 +962,13 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
                 gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
                 tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
-                yield sse(
-                    "benchmark",
+                log_terminal_benchmark(
+                    query=last_message,
+                    route="Syllabus RAG",
                     total_time=total_time,
                     ttft=ttft,
                     tokens=token_count,
-                    tokens_per_sec=tok_per_sec,
-                    route="Syllabus RAG",
+                    tok_per_sec=tok_per_sec,
                 )
                 yield sse("done")
             except (asyncio.CancelledError, GeneratorExit):
