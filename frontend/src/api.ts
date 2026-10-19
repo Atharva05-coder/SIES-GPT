@@ -11,12 +11,17 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 export async function streamChat(
   messages: { role: Role; content: string }[],
   onEvent: (event: StreamEvent) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  requestId?: string
 ): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (requestId) {
+    headers["X-Request-ID"] = requestId;
+  }
   const res = await fetch(`${BASE}/api/smart_chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    headers,
+    body: JSON.stringify({ messages, request_id: requestId }),
     signal,
   });
 
@@ -71,3 +76,14 @@ export async function triggerPdfIngest(adminToken?: string): Promise<{ status: s
   if (!res.ok) throw new Error(`PDF ingest request failed (${res.status})`);
   return (await res.json()) as { status: string };
 }
+
+export async function cancelChat(requestId: string): Promise<void> {
+  try {
+    await fetch(`${BASE}/api/chat/cancel?request_id=${encodeURIComponent(requestId)}`, {
+      method: "POST",
+    });
+  } catch {
+    /* ignore network abort errors when sending cancel request */
+  }
+}
+
