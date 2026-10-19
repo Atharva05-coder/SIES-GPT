@@ -36,7 +36,10 @@ def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
             "Data Science: CEPEC7021: Augmented Reality and Virtual Reality\nSmart Systems: CEPEC7022: Quantum Computing\nNetwork and Security: CEPEC7023: Intelligent Forensic\nArtificial Intelligence: CEPEC7024: Reinforcement Learning"
         )
 
-        if is_minor_query and "Multidisciplinary Minor" in clean_text:
+        elective_output = None
+        minor_output = None
+
+        if "Multidisciplinary Minor" in clean_text:
             idx = clean_text.find("Multidisciplinary Minor")
             mdm_part = clean_text[idx:]
             oe_idx = mdm_part.find("Open Elective")
@@ -64,35 +67,49 @@ def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
                 res = [f"### {sem_str} Multidisciplinary Minor (MDM) Options\n"]
                 for c, n in courses:
                     res.append(f"- **{c}**: {n}")
-                return "\n".join(res)
+                minor_output = "\n".join(res)
 
-        if is_elective_query:
-            sections = re.split(r"(?i)(Program Elective\s*[-–—]?\s*(?:[I|V|X]+|\d+))", clean_text)
-            if len(sections) >= 3:
-                results = []
-                category_names = []
-                for i in range(1, len(sections), 2):
-                    raw_header = sections[i].strip()
-                    header = re.sub(r"Program\s+Elective\s*[-–—]?\s*", "Program Elective - ", raw_header, flags=re.IGNORECASE).strip()
-                    category_names.append(header)
-                    body = sections[i+1]
-                    lines = []
-                    for line in body.split("\n"):
-                        line = line.strip()
-                        if re.search(r"\b(Multidisciplinary Minor|Open Elective)\b", line, re.IGNORECASE):
-                            break
-                        m_match = re.match(r"^([^:]+):\s*(CEPEC\d+):\s*(.+)$", line)
-                        if m_match:
-                            bucket, code, name = m_match.group(1).strip(), m_match.group(2).strip(), m_match.group(3).strip()
-                            lines.append(f"- **{bucket}**: {code}: {name}")
-                    if lines:
-                        results.append(f"### {header}\n" + "\n".join(lines))
+        sections = re.split(r"(?i)(Program Elective\s*[-–—]?\s*(?:[I|V|X]+|\d+))", clean_text)
+        if len(sections) >= 3:
+            results = []
+            category_names = []
+            for i in range(1, len(sections), 2):
+                raw_header = sections[i].strip()
+                header = re.sub(r"Program\s+Elective\s*[-–—]?\s*", "Program Elective - ", raw_header, flags=re.IGNORECASE).strip()
+                category_names.append(header)
+                body = sections[i+1]
+                lines = []
+                for line in body.split("\n"):
+                    line = line.strip()
+                    if re.search(r"\b(Multidisciplinary Minor|Open Elective)\b", line, re.IGNORECASE):
+                        break
+                    m_match = re.match(r"^([^:]+):\s*(CEPEC\d+):\s*(.+)$", line)
+                    if m_match:
+                        bucket, code, name = m_match.group(1).strip(), m_match.group(2).strip(), m_match.group(3).strip()
+                        lines.append(f"- **{bucket}**: {code}: {name}")
+                if lines:
+                    results.append(f"### {header}\n" + "\n".join(lines))
 
-                if results:
-                    roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
-                    sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
-                    intro = f"{sem_str} offers **{'** and **'.join(category_names)}**. Below are the available elective options:\n\n"
-                    return intro + "\n\n".join(results)
+            if results:
+                roman_map = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII"}
+                sem_str = f"Semester {roman_map.get(sem_num, sem_num)}" if sem_num else "The semester"
+                intro = f"{sem_str} offers **{'** and **'.join(category_names)}**. Below are the available elective options:\n\n"
+                elective_output = intro + "\n\n".join(results)
+
+        if is_minor_query and not is_elective_query:
+            if minor_output:
+                return minor_output
+        elif is_elective_query and not is_minor_query:
+            if elective_output:
+                return elective_output
+        elif is_minor_query and is_elective_query:
+            parts = [p for p in [elective_output, minor_output] if p]
+            if parts:
+                return "\n\n---\n\n".join(parts)
+        else:
+            parts = [p for p in [elective_output, minor_output] if p]
+            if parts:
+                return "\n\n---\n\n".join(parts)
 
     return None
 
@@ -705,7 +722,7 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
         return None
     if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
         return None
-    if re.search(r"\b(syllabus|curriculum|module\s+\d+)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+    if re.search(r"\b(module\s+\d+|unit\s+\d+)\b", query, re.IGNORECASE):
         return None
 
     target_code = None
@@ -800,17 +817,28 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     check_query = reframe_query(original_question if original_question else question)
 
     # Fast deterministic extractors (0.005s execution)
-    fast_outline = extract_course_module_outline(check_query, retrieved_chunks)
-    if fast_outline:
-        return early_return(fast_outline)
+    wants_structure = bool(re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure|structure)\b", check_query, re.I))
+    wants_electives = bool(re.search(r"\b(electives?|elective options?|minors?|mdms?|multidisciplinary)\b", check_query, re.I))
 
-    fast_electives = extract_semester_electives(check_query, retrieved_chunks)
-    if fast_electives:
-        return early_return(fast_electives)
+    if wants_structure and wants_electives:
+        fast_structure = extract_semester_program_structure(check_query, retrieved_chunks)
+        fast_electives = extract_semester_electives(check_query, retrieved_chunks)
+        if fast_structure and fast_electives:
+            return early_return(f"{fast_structure}\n\n---\n\n{fast_electives}")
+        elif fast_structure:
+            return early_return(fast_structure)
+        elif fast_electives:
+            return early_return(fast_electives)
 
-    fast_structure = extract_semester_program_structure(check_query, retrieved_chunks)
-    if fast_structure:
-        return early_return(fast_structure)
+    if wants_electives:
+        fast_electives = extract_semester_electives(check_query, retrieved_chunks)
+        if fast_electives:
+            return early_return(fast_electives)
+
+    if wants_structure:
+        fast_structure = extract_semester_program_structure(check_query, retrieved_chunks)
+        if fast_structure:
+            return early_return(fast_structure)
 
     fast_books = extract_textbooks_and_references(check_query, retrieved_chunks)
     if fast_books:
@@ -820,9 +848,20 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     if fast_exps:
         return early_return(fast_exps)
 
+    # Specific sub-module queries (e.g. "Module 2 of OS", "Unit 1")
+    is_specific_module = bool(re.search(r"\b(module\s+\d+|unit\s+\d+|from\s+\d+|between\s+\d+|first\s+\d+\s+modules?)\b", check_query, re.I))
+    if is_specific_module:
+        fast_outline = extract_course_module_outline(check_query, retrieved_chunks)
+        if fast_outline:
+            return early_return(fast_outline)
+
     fast_info = extract_course_full_information(check_query, retrieved_chunks)
     if fast_info:
         return early_return(fast_info)
+
+    fast_outline = extract_course_module_outline(check_query, retrieved_chunks)
+    if fast_outline:
+        return early_return(fast_outline)
 
     if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
         table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
