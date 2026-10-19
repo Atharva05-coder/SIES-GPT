@@ -64,6 +64,30 @@ STOP_WORDS = {
     "in",
     "is",
     "me",
+    "my",
+    "you",
+    "your",
+    "we",
+    "our",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "it",
+    "its",
+    "they",
+    "them",
+    "their",
+    "can",
+    "should",
+    "would",
+    "could",
+    "refer",
+    "read",
+    "use",
+    "suggest",
+    "recommended",
     "of",
     "on",
     "please",
@@ -85,13 +109,6 @@ STOP_WORDS = {
     "learning",
     "content",
     "outline",
-    "syllabus",
-    "module",
-    "modules",
-    "topic",
-    "topics",
-    "self",
-    "learning",
     "lab",
     "labs",
     "practical",
@@ -99,7 +116,6 @@ STOP_WORDS = {
     "experiment",
     "experiments",
     "complete",
-    "wise",
     "list",
     "first",
     "initial",
@@ -405,7 +421,16 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         "practicals",
         "experiment",
         "experiments",
+        "i",
+        "ii",
+        "iii",
+        "iv",
+        "v",
+        "vi",
+        "vii",
+        "viii",
     }
+    is_roman_one = bool(re.search(r"(?:math(?:ematics)?|applied|project|physics|chemistry|mechanics|bee|graphics|part|sem(?:ester)?)\s*[-:]?\s*(?:1|i)\b", question, re.IGNORECASE))
     ranked_sections = []
     for section, score in zip(sections, scores):
         if code_match and section["code"] != code_match.group():
@@ -441,16 +466,29 @@ def _retrieve_course_section(question: str) -> list[dict] | None:
         if not code_match and not subject_overlap and not module_overlap:
             continue
 
+        cname = extract_course_name_from_header(section["header"])
+        raw_cname_tokens = {t for t in _tokenize(cname) if not t.isdigit()}
+        cname_levels = {NUM_TO_ROMAN[t] for t in raw_cname_tokens if t in NUM_TO_ROMAN}
+        cname_tokens = raw_cname_tokens - generic_title_terms
+
+        if cname_tokens and cname_tokens.issubset(query_tokens):
+            score += 60.0
+        elif cname_tokens and len(cname_tokens & query_tokens) >= 2 and len(cname_tokens & query_tokens) / len(cname_tokens) >= 0.66:
+            score += 40.0
+
         score += len(subject_overlap) * 2.0
         score += len(module_overlap) * 1.5
         if code_match:
             score += 100.0
 
         # Check course level / roman numerals (e.g. Mathematics-III vs Mathematics-IV)
-        cname = extract_course_name_from_header(section["header"])
-        cname_tokens = set(_tokenize(cname))
-        cname_levels = {NUM_TO_ROMAN[t] for t in cname_tokens if t in NUM_TO_ROMAN}
-        query_levels = {NUM_TO_ROMAN[t] for t in query_tokens if t in NUM_TO_ROMAN}
+        query_levels = set()
+        for t in query_tokens:
+            if t in NUM_TO_ROMAN:
+                if t == "i" and not is_roman_one:
+                    continue
+                query_levels.add(NUM_TO_ROMAN[t])
+
         if query_levels and cname_levels:
             if query_levels == cname_levels:
                 score += 35.0

@@ -275,13 +275,20 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
         )
         if module["self_learning"]:
             lines.append(
-                "**Self-learning topics**\n"
+                "**Self-learning Topics:**\n"
                 + " ".join(topic for topic in module["self_learning"] if topic)
+            )
+        mod_text = "\n\n".join(lines)
+        if "**Self-learning Topics:**" not in mod_text:
+            mod_text = re.sub(
+                r'(?i)\s*(?:\.|\b)\s*Self-?Learning(?:\s*topics?)?\s*:\s*',
+                r'.\n\n**Self-learning Topics:**\n',
+                mod_text,
             )
         outlines.append(
             {
                 "number": module_number,
-                "text": "\n\n".join(lines),
+                "text": mod_text,
                 "pages": module["pages"],
             }
         )

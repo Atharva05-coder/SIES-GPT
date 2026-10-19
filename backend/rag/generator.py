@@ -471,27 +471,120 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
     if not matched_modules:
         return None
 
+def format_self_learning_text(text: str) -> str:
+    if not text:
+        return ""
+    if "**Self-learning Topics:**" in text:
+        return text
+    return re.sub(
+        r"(?i)\s*(?:\.|\b)\s*Self-?Learning(?:\s*topics?)?\s*:\s*",
+        r".\n\n**Self-learning Topics:**\n",
+        text,
+    )
+
+
     if len(matched_modules) > 1:
         mod_str = ", ".join(f"Module {m['number']}" for m in matched_modules[:-1]) + f" and Module {matched_modules[-1]['number']}"
     else:
         mod_str = f"Module {matched_modules[0]['number']}"
 
     header = f"### {target_code}: {course_name} ({mod_str})\n\n"
-    module_texts = [m["text"] for m in matched_modules]
+    module_texts = [format_self_learning_text(m.get("text", "")) for m in matched_modules]
+    return header + "\n\n---\n\n".join(module_texts)
+
+
+def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+
+    if re.search(r"\b(full\s+syllabus|complete\s+syllabus|overall\s+syllabus|entire\s+syllabus|teaching\s+scheme|examination\s+scheme|exam\s+scheme|outcomes?|objectives?|credit\s+distribution|how\s+many\s+credits?)\b", query, re.I):
+        return None
+    if parse_requested_modules(query) or re.search(r"\bunit\s*\d+(\.\d+)?\b", query, re.I):
+        return None
+
+    wants_modules = bool(
+        re.search(r"\b(?:only\s+modules?|just\s+modules?|modules?\s+and\s+self-?learning|course\s+modules?|give\s+modules?|what\s+are\s+the\s+modules?|list\s+of\s+modules?|show\s+modules?|modules?\s+of)\b", query, re.I)
+        or re.search(r"\bmodules?\b", query, re.I)
+    )
+    if not wants_modules:
+        return None
+
+    target_code = None
+    for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    if not target_code or target_code not in sections:
+        return None
+
+    section = sections[target_code]
+    course_name = extract_course_name_from_header(section["header"])
+    outlines = section.get("module_outlines", [])
+    if not outlines:
+        return None
+
+    header = f"### {target_code}: {course_name} - Course Modules\n\n"
+    module_texts = [format_self_learning_text(m.get("text", "")) for m in outlines]
     return header + "\n\n---\n\n".join(module_texts)
 
 
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
-    if not re.search(r"\b(textbooks?|reference books?|references?|recommended books?|online references?|online resources?)\b", query, re.IGNORECASE):
+    if not re.search(
+        r"\b(textbooks?|text\s*books?|reference\s*books?|references?|recommended\s*books?|online\s*references?|online\s*resources?|books?|reading\s*materials?|recommended\s*reading|bibliography)\b",
+        query,
+        re.IGNORECASE,
+    ):
         return None
-    if re.search(r"\b(experiments?|labs?|practicals?|modules?|scheme)\b", query, re.IGNORECASE):
+    if re.search(r"\b(experiments?|labs?|practicals?|modules?|scheme|outcomes?|objectives?)\b", query, re.IGNORECASE):
         return None
 
-    is_only_online = bool(re.search(r"\bonline\s+(?:references?|resources?)\b", query, re.IGNORECASE))
-    is_only_textbooks = bool(re.search(r"\btextbooks?\b", query, re.IGNORECASE) and not re.search(r"\b(references?|reference books?|online|all|both)\b", query, re.IGNORECASE))
-    is_only_references = bool(re.search(r"\b(references?|reference books?)\b", query, re.IGNORECASE) and not re.search(r"\b(textbooks?|all|both)\b", query, re.IGNORECASE))
+    is_only_online = bool(
+        re.search(r"\bonline\s+(?:references?|resources?)\b", query, re.IGNORECASE)
+        and not re.search(r"\b(textbooks?|books?|all|both)\b", query, re.IGNORECASE)
+    )
+    is_only_textbooks = bool(
+        re.search(r"\btext\s*books?\b", query, re.IGNORECASE)
+        and not re.search(r"\b(references?|reference\s*books?|online|all|both|reading)\b", query, re.IGNORECASE)
+    )
+    is_only_references = bool(
+        re.search(r"\b(reference\s*books?|references?)\b", query, re.IGNORECASE)
+        and not re.search(r"\b(text\s*books?|all|both|online)\b", query, re.IGNORECASE)
+        and not re.search(r"\brefer\b", query, re.IGNORECASE)
+    )
 
+    target_code = None
     for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    candidate_pages = []
+    if target_code and target_code in sections:
+        candidate_pages = sections[target_code]["all_pages"]
+    else:
+        candidate_pages = retrieved_chunks
+
+    course_prefix = ""
+    if target_code and target_code in sections:
+        cname = extract_course_name_from_header(sections[target_code]["header"])
+        course_prefix = f"### {target_code}: {cname} - Recommended Books & References\n\n"
+
+    for item in candidate_pages:
         text = item.get("text", "")
         if not re.search(r"(?i)\b(?:Textbooks|Reference books|References|Online References|Online Resources):", text):
             continue
@@ -533,7 +626,7 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
                 results.append(f"### Online References\n{online_text}")
 
         if results:
-            return "\n\n".join(results)
+            return course_prefix + "\n\n".join(results)
 
     return None
 
@@ -844,7 +937,7 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
         if outlines:
             res_lines.append("### Course Modules\n")
             for m in outlines:
-                res_lines.append(m["text"])
+                res_lines.append(format_self_learning_text(m.get("text", "")))
                 res_lines.append("")
 
     books = extract_textbooks_and_references("all textbooks and references", section["all_pages"])
@@ -876,7 +969,9 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
 
     if re.search(r"\b(program structure|curriculum structure|electives?|minors?|mdms?|credit distribution|semester-?wise credit|how many credits)\b", query, re.IGNORECASE):
         return None
-    if re.search(r"\b(?:only\s+)?(textbooks?|reference books?|references?)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+    if re.search(r"\b(?:only\s+)?(textbooks?|text\s*books?|reference\s*books?|references?|books?|reading\s*materials?|recommended\s*reading)\b", query, re.IGNORECASE) and not re.search(r"\b(information|informatin|details?|overview|about)\b", query, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:only\s+modules?|just\s+modules?|modules?\s+and\s+self-?learning|course\s+modules?|give\s+modules?|what\s+are\s+the\s+modules?|list\s+of\s+modules?|show\s+modules?|modules?\s+of)\b", query, re.IGNORECASE) and not re.search(r"\b(full\s+syllabus|complete\s+syllabus|overall\s+syllabus)\b", query, re.IGNORECASE):
         return None
     if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
         return None
@@ -1010,6 +1105,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_modules = extract_specific_course_modules(check_query, retrieved_chunks)
     if fast_modules:
         return early_return(fast_modules)
+
+    fast_all_modules = extract_course_all_modules_only(check_query, retrieved_chunks)
+    if fast_all_modules:
+        return early_return(fast_all_modules)
 
     fast_info = extract_course_full_information(check_query, retrieved_chunks)
     if fast_info:
