@@ -737,6 +737,8 @@ FAST_SYLLABUS_RE = re.compile(
     r"unit\s*\d+|topics?|outcomes?|course\s*outcome|program\s*outcome|los|cos)\b"
     # Course codes must have a recognised 3-letter+ prefix followed by digits
     r"|\b(?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CSC|CSL|ITC|ITL|AIDS|AIML)\d{2,4}[A-Z0-9/]*\b"
+    # Common academic course abbreviations and shorthands
+    r"|\b(?:m-?[1-4]|am-?[1-4]|maths?-?[1-4]|maths?-?[iIvVxX]+|dsa|ada|cns|coa|bda|hpc|dwm|eh|mv|df|adbms|dl|arvr|qc|rl|bc)\b"
     # Common academic subjects & syllabus courses
     r"|\b(?:computer\s*networks?|theoretical\s*computer\s*science|tcs|data\s*structures?|"
     r"discrete\s*structures?|graph\s*theory|database\s*management|dbms|"
@@ -799,6 +801,17 @@ def fast_classify_intent(query: str) -> str | None:
     crgx = get_syllabus_courses_regex()
     if (crgx and crgx.search(query)) or FAST_SYLLABUS_RE.search(query):
         return "syllabus"
+    # 4. Check with reframed/expanded abbreviations (e.g. M3 -> Applied Mathematics- III)
+    try:
+        from rag.query_rewriter import reframe_query
+        expanded = reframe_query(query)
+        if expanded != query:
+            if FAST_WEBSITE_RE.search(expanded):
+                return "website"
+            if (crgx and crgx.search(expanded)) or FAST_SYLLABUS_RE.search(expanded):
+                return "syllabus"
+    except Exception:
+        pass
     return None
 
 
@@ -855,7 +868,13 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
             log.error(f"Intent classifier failed: {e}")
-            intent = "website"
+            crgx = get_syllabus_courses_regex()
+            if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
+                intent = "syllabus"
+            elif FAST_DOCUMENT_RE.search(last_message):
+                intent = "document"
+            else:
+                intent = "website"
         finally:
             if req_id:
                 ACTIVE_REQUESTS.pop(req_id, None)

@@ -242,12 +242,8 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
         if len(tot_parts) >= 7:
             table_md += f"\n\n**Total Credits Assigned:** {tot_parts[-1]}"
 
-    if elective_text:
-        elective_part = extract_semester_electives(query, [{"text": elective_text}])
-        if elective_part:
-            table_md += "\n\n" + elective_part
-
     return table_md
+
 
 
 def extract_course_module_outline(query: str, retrieved_chunks) -> str | None:
