@@ -36,6 +36,7 @@ from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel, Field
 
 ACTIVE_REQUESTS: dict[str, Callable[[], None]] = {}
+CANCELLED_REQUESTS: set[str] = set()
 
 import site_agent as sa
 import test as pdf_rag
@@ -303,6 +304,11 @@ async def stream_answer(
     if req_id:
         ACTIVE_REQUESTS[req_id] = cancel_this_stream
 
+    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+        log.info("stream_answer aborted immediately for cancelled req_id: %s", req_id)
+        yield sse("done")
+        return
+
     try:
         # ── Pre-fetch: guaranteed search + read_page before LLM runs ──────────
         user_query = messages[-1].content
@@ -511,6 +517,11 @@ async def stream_pdf_answer(
     if req_id:
         ACTIVE_REQUESTS[req_id] = cancel_pdf_stream
 
+    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+        log.info("stream_pdf_answer aborted immediately for cancelled req_id: %s", req_id)
+        yield sse("done")
+        return
+
     try:
         recent_messages = messages[-3:] if len(messages) > 3 else messages
         augmented_messages: list[dict[str, str]] = []
@@ -612,6 +623,10 @@ async def cancel_chat(
     request_id: str | None = None,
 ) -> dict[str, str]:
     target_id = (req.request_id if req and req.request_id else request_id) or ""
+    if target_id:
+        CANCELLED_REQUESTS.add(target_id)
+        if len(CANCELLED_REQUESTS) > 1000:
+            CANCELLED_REQUESTS.pop()
     cb = ACTIVE_REQUESTS.pop(target_id, None)
     if cb:
         try:
@@ -620,7 +635,7 @@ async def cancel_chat(
             return {"status": "cancelled", "request_id": target_id}
         except Exception as e:
             log.warning("Error cancelling request %s: %s", target_id, e)
-    return {"status": "not_found_or_already_done", "request_id": target_id}
+    return {"status": "marked_cancelled", "request_id": target_id}
 
 
 @app.post("/api/chat")
@@ -760,18 +775,61 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     last_message = req.messages[-1].content
     req_id = req.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
 
+    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+        log.info("smart_chat aborted early for cancelled req_id: %s", req_id)
+        return StreamingResponse(
+            iter([sse("done")]),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # Fast-path hybrid intent routing (instant: 0.0001s)
     intent = fast_classify_intent(last_message)
     if intent is None:
+        intent_task: asyncio.Task[Any] | None = None
+
+        def cancel_intent():
+            if intent_task and not intent_task.done():
+                intent_task.cancel()
+
+        if req_id:
+            ACTIVE_REQUESTS[req_id] = cancel_intent
+
         try:
             from agent import Message
 
-            result = await Runner.run(intent_agent, last_message)
+            intent_task = asyncio.create_task(Runner.run(intent_agent, last_message))
+            result = await intent_task
             parsed = result.final_output_as(Message)
             intent = parsed.intent
+        except (asyncio.CancelledError, GeneratorExit):
+            log.info("Intent classification cancelled for req_id: %s", req_id)
+            return StreamingResponse(
+                iter([sse("done")]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
         except Exception as e:
+            if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+                log.info("Cancelled during intent classification for req_id: %s", req_id)
+                return StreamingResponse(
+                    iter([sse("done")]),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
             log.error(f"Intent classifier failed: {e}")
             intent = "website"
+        finally:
+            if req_id:
+                ACTIVE_REQUESTS.pop(req_id, None)
+
+    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+        log.info("smart_chat aborted before dispatching for req_id: %s", req_id)
+        return StreamingResponse(
+            iter([sse("done")]),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     log.info(f"Routed query to: {intent} (req_id: {req_id})")
 
@@ -789,6 +847,11 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
             if req_id:
                 ACTIVE_REQUESTS[req_id] = cancel_syllabus_stream
+
+            if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+                log.info("stream_syllabus aborted immediately for cancelled req_id: %s", req_id)
+                yield sse("done")
+                return
 
             try:
                 yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
