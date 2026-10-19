@@ -233,8 +233,12 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     else:
         page_content = index.read_page(top_url)
 
-    # Provide primary page text (up to 4,000 chars) so full committee lists, MoUs, and tables are preserved
-    full_content = page_content[:4000].strip()
+    # For large pages, prioritize the hit chunks that actually matched the query
+    top_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == top_url and h.get("text")]
+    if top_hit_chunks and len(page_content) > 4000:
+        full_content = "\n\n".join(top_hit_chunks)[:4000].strip()
+    else:
+        full_content = page_content[:4000].strip()
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
@@ -242,7 +246,11 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
         if second_url.rstrip("/") != top_url.rstrip("/"):
             p2_obj = index.pages.get(sa.normalize_url(second_url))
             if p2_obj:
-                second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
+                second_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == second_url and h.get("text")]
+                if second_hit_chunks and len("\n".join(p2_obj.get("lines", []))) > 2000:
+                    second_content = "\n\n".join(second_hit_chunks)[:1500].strip()
+                else:
+                    second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
                 if second_content:
                     full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
                     read_urls.append(second_url)
@@ -758,7 +766,7 @@ FAST_SYLLABUS_RE = re.compile(
 FAST_DOCUMENT_RE = re.compile(
     r"\b(pdf|documents?|brochures?|polic(y|ies)|guidelines?|rules?|regulations?|handbook|"
     r"code of conduct|accreditation|nba|naac|nirf|ipr|patents?|emergency exits?|floor plans?|"
-    r"internships?|anti[- ]ragging|mous?|epsilon)\b",
+    r"internships?|mous?|epsilon)\b",
     re.IGNORECASE,
 )
 
@@ -779,7 +787,7 @@ FAST_WEBSITE_RE = re.compile(
     r"IIIC|iiic|innovation.*incubation|incubation.*cell|"
     r"iste|nss|cultural committee|sports committee|"
     r"tpc|training.*placement|placement.*cell|"
-    r"grievance|anti.?ragging committee|posh|"
+    r"grievance|anti.?ragging|ragging|posh|"
     r"iqac|internal quality|cdc|career development|"
     r"alumni|entrepreneurship|e.?cell|"
     r"ieee|csi|acm|technical committee|"

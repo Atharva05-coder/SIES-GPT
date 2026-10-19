@@ -324,7 +324,118 @@ def parse_experiment_range(query: str) -> tuple[int, int]:
         if n is not None:
             return (n, n)
 
-    return (1, 50)
+def parse_requested_modules(query: str) -> list[int]:
+    m_range = re.search(r'\bmodules?\s*(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b', query, re.I)
+    if m_range:
+        v1 = re.sub(r'(?:st|nd|rd|th)$', '', m_range.group(1).lower())
+        v2 = re.sub(r'(?:st|nd|rd|th)$', '', m_range.group(2).lower())
+        n1 = WORD_TO_NUM.get(v1, int(v1) if v1.isdigit() else None)
+        n2 = WORD_TO_NUM.get(v2, int(v2) if v2.isdigit() else None)
+        if n1 and n2:
+            return list(range(min(n1, n2), max(n1, n2) + 1))
+
+    m_after = re.search(r'\bmodules?\s*(?:no\.?|#)?\s*([0-9a-z,\s&/-]+)', query, re.I)
+    if m_after:
+        after_str = m_after.group(1)
+        after_str = re.split(r'\b(?:of|in|for|from|with|and\s+its)\b', after_str, flags=re.I)[0]
+        tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', after_str, re.I)
+        nums = []
+        for t in tokens:
+            clean = re.sub(r'(?:st|nd|rd|th)$', '', t.lower())
+            if clean in WORD_TO_NUM:
+                nums.append(WORD_TO_NUM[clean])
+            elif clean.isdigit() and 1 <= int(clean) <= 10:
+                nums.append(int(clean))
+        if nums:
+            return sorted(list(dict.fromkeys(nums)))
+
+    m_before = re.search(r'([0-9a-z,\s&/-]+)\s+modules?\b', query, re.I)
+    if m_before:
+        before_str = m_before.group(1)
+        tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', before_str, re.I)
+        nums = []
+        for t in tokens:
+            clean = re.sub(r'(?:st|nd|rd|th)$', '', t.lower())
+            if clean in WORD_TO_NUM:
+                nums.append(WORD_TO_NUM[clean])
+            elif clean.isdigit() and 1 <= int(clean) <= 10:
+                nums.append(int(clean))
+        if nums:
+            return sorted(list(dict.fromkeys(nums)))
+
+    return []
+
+
+def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+
+    m_unit = re.search(r'\bunit\s*(\d+\.\d+)\b', query, re.I)
+    req_modules = parse_requested_modules(query)
+
+    if not req_modules and not m_unit:
+        return None
+
+    # Don't intercept if query is explicitly asking for whole syllabus / overview
+    if re.search(r"\b(all modules|full syllabus|complete syllabus|overall syllabus)\b", query, re.I):
+        return None
+
+    target_code = None
+    for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    if not target_code or target_code not in sections:
+        return None
+
+    section = sections[target_code]
+    course_name = extract_course_name_from_header(section["header"])
+    outlines = section.get("module_outlines", [])
+
+    if m_unit:
+        req_unit = m_unit.group(1)
+        target_mod_num = int(req_unit.split(".")[0])
+        for m in outlines:
+            if m.get("number") == target_mod_num:
+                m_text = m.get("text", "")
+                unit_pat = re.compile(rf"(?is)\*\*Unit\s+{re.escape(req_unit)}\*\*\s*(.*?)(?=\n\s*\*\*Unit\s+\d+\.\d+|\n\s*\*\*Self-learning|\Z)")
+                unit_match = unit_pat.search(m_text)
+                if unit_match:
+                    unit_body = unit_match.group(1).strip()
+                    lines = [
+                        f"### {target_code}: {course_name}",
+                        f"**Module {m['number']}: {m.get('title', '')}**\n",
+                        f"**Unit {req_unit}:** {unit_body}",
+                    ]
+                    return "\n\n".join(lines)
+
+    if not req_modules:
+        return None
+
+    matched_modules = [m for m in outlines if m.get("number") in req_modules]
+    if not matched_modules:
+        sec_text = section.get("text", "")
+        for n in req_modules:
+            mod_pat = re.compile(rf"(?is)(##?\s*Module\s*{n}[:\s].*?)(?=(?:##?\s*Module\s*\d+|Textbooks|Reference books|Assessment Scheme|Examination Scheme|\Z))")
+            m_found = mod_pat.search(sec_text)
+            if m_found:
+                matched_modules.append({"number": n, "text": m_found.group(1).strip()})
+
+    if not matched_modules:
+        return None
+
+    mod_str = " and ".join(f"Module {m['number']}" for m in matched_modules)
+    header = f"### {target_code}: {course_name} ({mod_str})\n\n"
+    module_texts = [m["text"] for m in matched_modules]
+    return header + "\n\n---\n\n".join(module_texts)
 
 
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
@@ -718,7 +829,7 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
         return None
     if re.search(r"\b(from\s+\d+|between\s+\d+|first\s+\d+\s+experiments?|\d+(?:st|nd|rd|th)?\s+experiments?)\b", query, re.IGNORECASE):
         return None
-    if re.search(r"\b(module\s+\d+|unit\s+\d+)\b", query, re.IGNORECASE):
+    if parse_requested_modules(query) or re.search(r"\bunit\s*\d+(\.\d+)?\b", query, re.IGNORECASE):
         return None
 
     target_code = None
@@ -844,12 +955,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     if fast_exps:
         return early_return(fast_exps)
 
-    # Specific sub-module queries (e.g. "Module 2 of OS", "Unit 1")
-    is_specific_module = bool(re.search(r"\b(module\s+\d+|unit\s+\d+|from\s+\d+|between\s+\d+|first\s+\d+\s+modules?)\b", check_query, re.I))
-    if is_specific_module:
-        fast_outline = extract_course_module_outline(check_query, retrieved_chunks)
-        if fast_outline:
-            return early_return(fast_outline)
+    # Specific sub-module or unit queries (e.g. "Give CN 3rd and 6th module", "Module 2 of OS", "Unit 1.1")
+    fast_modules = extract_specific_course_modules(check_query, retrieved_chunks)
+    if fast_modules:
+        return early_return(fast_modules)
 
     fast_info = extract_course_full_information(check_query, retrieved_chunks)
     if fast_info:
