@@ -23,12 +23,11 @@ load_dotenv()
 import re
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
-import uuid
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai.types.responses import ResponseTextDeltaEvent
@@ -151,11 +150,6 @@ class Msg(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[Msg] = Field(min_length=1, max_length=20)
-    request_id: str | None = None
-
-
-# Active streaming generation callbacks for cancellation: request_id -> cancel_func
-ACTIVE_REQUESTS: dict[str, Callable[[], None]] = {}
 
 
 # -------------------------------- sources --------------------------------- #
@@ -263,11 +257,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
 
 
 async def stream_answer(
-    agent: Any,
-    index: sa.SiteIndex,
-    messages: list[Msg],
-    request: Request | None = None,
-    req_id: str | None = None,
+    agent: Any, index: sa.SiteIndex, messages: list[Msg]
 ) -> AsyncIterator[str]:
     answer: list[str] = []
     searches: list[list[str]] = []
@@ -321,27 +311,8 @@ async def stream_answer(
         # ──────────────────────────────────────────────────────────────────────
 
         # Use an async queue with background keep-alive pinger so browser/proxy connection never times out during LLM generation
-        event_queue: asyncio.Queue = asyncio.Queue()
+        event_queue = asyncio.Queue()
         stop_ping = asyncio.Event()
-        ping_task: asyncio.Task[None] | None = None
-        stream_task: asyncio.Task[None] | None = None
-        active_runner_result = None
-
-        def cancel_this_stream():
-            log.info("Cancelling stream_answer for req_id: %s", req_id)
-            stop_ping.set()
-            if ping_task is not None and not ping_task.done():
-                ping_task.cancel()
-            if stream_task is not None and not stream_task.done():
-                stream_task.cancel()
-            if active_runner_result:
-                try:
-                    active_runner_result.cancel(mode="immediate")
-                except Exception as e:
-                    log.debug("Error cancelling runner: %s", e)
-
-        if req_id:
-            ACTIVE_REQUESTS[req_id] = cancel_this_stream
 
         async def pinger():
             try:
@@ -353,25 +324,15 @@ async def stream_answer(
                 pass
 
         async def run_llm_stream():
-            nonlocal active_runner_result
             try:
                 result = Runner.run_streamed(
                     agent,
                     augmented_messages,  # type: ignore
                     max_turns=3,
                 )
-                active_runner_result = result
                 async for event in result.stream_events():
                     stop_ping.set()
                     await event_queue.put(event)
-            except asyncio.CancelledError:
-                log.info("run_llm_stream task cancelled for req_id: %s", req_id)
-                if active_runner_result:
-                    try:
-                        active_runner_result.cancel(mode="immediate")
-                    except Exception:
-                        pass
-                raise
             except Exception as exc:
                 stop_ping.set()
                 await event_queue.put(exc)
@@ -383,20 +344,7 @@ async def stream_answer(
         stream_task = asyncio.create_task(run_llm_stream())
 
         while True:
-            if request is not None and await request.is_disconnected():
-                log.info("Client disconnected detected in stream_answer: %s", req_id)
-                cancel_this_stream()
-                break
-
-            try:
-                item = await asyncio.wait_for(event_queue.get(), timeout=0.25)
-            except asyncio.TimeoutError:
-                if request is not None and await request.is_disconnected():
-                    log.info("Client disconnected during timeout in stream_answer: %s", req_id)
-                    cancel_this_stream()
-                    break
-                continue
-
+            item = await event_queue.get()
             if item is None:
                 break
             if isinstance(item, str):
@@ -442,6 +390,9 @@ async def stream_answer(
                             pdf_sources.append({"url": url, "title": clean_title})
                     yield sse("tool_output")
 
+        ping_task.cancel()
+        await stream_task
+
         chosen = pick_sources("".join(answer), searches, reads)
         sources = [{"url": u, "title": source_title(index, u)} for u in chosen]
         for s in pdf_sources:
@@ -450,10 +401,6 @@ async def stream_answer(
         if sources:
             yield sse("sources", sources=sources)
         yield sse("done")
-    except (asyncio.CancelledError, GeneratorExit):
-        log.info("stream_answer received cancellation / GeneratorExit for req_id: %s", req_id)
-        cancel_this_stream()
-        raise
     except MaxTurnsExceeded:
         yield sse(
             "error",
@@ -465,33 +412,13 @@ async def stream_answer(
             "error",
             message=f"Something went wrong while generating answer: {e}",
         )
-    finally:
-        cancel_this_stream()
-        if req_id:
-            ACTIVE_REQUESTS.pop(req_id, None)
 
 
 async def stream_pdf_answer(
-    agent: Any,
-    messages: list[Msg],
-    request: Request | None = None,
-    req_id: str | None = None,
+    agent: Any, messages: list[Msg]
 ) -> AsyncIterator[str]:
     answer: list[str] = []
     pdf_sources: list[dict[str, str]] = []
-    runner_result = None
-
-    def cancel_pdf_stream():
-        log.info("Cancelling stream_pdf_answer for req_id: %s", req_id)
-        if runner_result:
-            try:
-                runner_result.cancel(mode="immediate")
-            except Exception as e:
-                log.debug("Error cancelling PDF runner: %s", e)
-
-    if req_id:
-        ACTIVE_REQUESTS[req_id] = cancel_pdf_stream
-
     try:
         recent_messages = messages[-3:] if len(messages) > 3 else messages
         augmented_messages: list[dict[str, str]] = []
@@ -507,13 +434,7 @@ async def stream_pdf_answer(
             augmented_messages,  # type: ignore
             max_turns=6,
         )
-        runner_result = result
         async for event in result.stream_events():
-            if request is not None and await request.is_disconnected():
-                log.info("Client disconnected detected in stream_pdf_answer: %s", req_id)
-                cancel_pdf_stream()
-                break
-
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
                     answer.append(event.data.delta)
@@ -537,10 +458,6 @@ async def stream_pdf_answer(
         if pdf_sources:
             yield sse("sources", sources=pdf_sources[:MAX_SOURCES])
         yield sse("done")
-    except (asyncio.CancelledError, GeneratorExit):
-        log.info("stream_pdf_answer received cancellation / GeneratorExit for req_id: %s", req_id)
-        cancel_pdf_stream()
-        raise
     except MaxTurnsExceeded:
         yield sse(
             "error",
@@ -552,10 +469,6 @@ async def stream_pdf_answer(
             "error",
             message="Something went wrong while searching PDF documents.",
         )
-    finally:
-        cancel_pdf_stream()
-        if req_id:
-            ACTIVE_REQUESTS.pop(req_id, None)
 
 
 # -------------------------------- endpoints ------------------------------- #
@@ -572,29 +485,8 @@ async def health() -> dict[str, Any]:
     }
 
 
-class CancelRequest(BaseModel):
-    request_id: str | None = None
-
-
-@app.post("/api/chat/cancel")
-async def cancel_chat(
-    req: CancelRequest | None = None,
-    request_id: str | None = None,
-) -> dict[str, str]:
-    target_id = (req.request_id if req and req.request_id else request_id) or ""
-    cb = ACTIVE_REQUESTS.pop(target_id, None)
-    if cb:
-        try:
-            cb()
-            log.info("Explicitly cancelled generation for request %s", target_id)
-            return {"status": "cancelled", "request_id": target_id}
-        except Exception as e:
-            log.warning("Error cancelling request %s: %s", target_id, e)
-    return {"status": "not_found_or_already_done", "request_id": target_id}
-
-
 @app.post("/api/chat")
-async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
+async def chat(req: ChatRequest) -> StreamingResponse:
     agent, index = state.agent, state.index
     if agent is None or index is None:
         raise HTTPException(
@@ -605,9 +497,8 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         raise HTTPException(
             status_code=422, detail="The last message must be from the user."
         )
-    req_id = req.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
     return StreamingResponse(
-        stream_answer(agent, index, req.messages, request=request, req_id=req_id),
+        stream_answer(agent, index, req.messages),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -721,14 +612,13 @@ def fast_classify_intent(query: str) -> str | None:
 
 
 @app.post("/api/smart_chat")
-async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
+async def smart_chat(req: ChatRequest) -> StreamingResponse:
     if req.messages[-1].role != "user":
         raise HTTPException(
             status_code=422, detail="The last message must be from the user."
         )
 
     last_message = req.messages[-1].content
-    req_id = req.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
 
     # Fast-path hybrid intent routing (instant: 0.0001s)
     intent = fast_classify_intent(last_message)
@@ -743,20 +633,11 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             log.error(f"Intent classifier failed: {e}")
             intent = "website"
 
-    log.info(f"Routed query ({req_id}) to: {intent}")
+    log.info(f"Routed query to: {intent}")
 
     if intent == "syllabus":
 
         async def stream_syllabus():
-            cancel_event = threading.Event()
-
-            def cancel_syllabus_stream():
-                log.info("Cancelling stream_syllabus for req_id: %s", req_id)
-                cancel_event.set()
-
-            if req_id:
-                ACTIVE_REQUESTS[req_id] = cancel_syllabus_stream
-
             try:
                 yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
 
@@ -768,28 +649,17 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
                 def run():
                     try:
-                        ask_sies_gpt(last_message, yield_callback=q.put, cancel_event=cancel_event)
+                        ask_sies_gpt(last_message, yield_callback=q.put)
                     except Exception as e:
                         q.put(e)
                     finally:
                         q.put(None)
 
-                t = threading.Thread(target=run, daemon=True)
+                t = threading.Thread(target=run)
                 t.start()
 
                 while True:
-                    if request is not None and await request.is_disconnected():
-                        log.info("Client disconnected detected in stream_syllabus: %s", req_id)
-                        cancel_syllabus_stream()
-                        break
-
-                    try:
-                        item = await asyncio.to_thread(q.get, timeout=0.25)
-                    except queue.Empty:
-                        if not t.is_alive():
-                            break
-                        continue
-
+                    item = await asyncio.to_thread(q.get)
                     if item is None:
                         break
                     if isinstance(item, Exception):
@@ -832,25 +702,12 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                         elif item["type"] == "token":
                             yield sse("token", text=item["text"])
 
-                if not cancel_event.is_set():
-                    yield sse("done")
-            except (asyncio.CancelledError, GeneratorExit):
-                log.info("stream_syllabus received cancellation / GeneratorExit for req_id: %s", req_id)
-                cancel_syllabus_stream()
-                raise
+                yield sse("done")
             except Exception as e:
                 log.exception("Syllabus stream failed")
                 yield sse("error", text=str(e))
-            finally:
-                cancel_syllabus_stream()
-                if req_id:
-                    ACTIVE_REQUESTS.pop(req_id, None)
 
-        return StreamingResponse(
-            stream_syllabus(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return StreamingResponse(stream_syllabus(), media_type="text/event-stream")
 
     elif intent == "document":
         pdf_agent = state.pdf_agent
@@ -859,12 +716,12 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             if app_agent is None or index is None:
                 raise HTTPException(status_code=503, detail="Index not ready.")
             return StreamingResponse(
-                stream_answer(app_agent, index, req.messages, request=request, req_id=req_id),
+                stream_answer(app_agent, index, req.messages),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         return StreamingResponse(
-            stream_pdf_answer(pdf_agent, req.messages, request=request, req_id=req_id),
+            stream_pdf_answer(pdf_agent, req.messages),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -874,14 +731,14 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         if app_agent is None or index is None:
             raise HTTPException(status_code=503, detail="Index not ready.")
         return StreamingResponse(
-            stream_answer(app_agent, index, req.messages, request=request, req_id=req_id),
+            stream_answer(app_agent, index, req.messages),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
 
 @app.post("/api/pdf_chat")
-async def pdf_chat(req: ChatRequest, request: Request) -> StreamingResponse:
+async def pdf_chat(req: ChatRequest) -> StreamingResponse:
     agent = state.pdf_agent
     if agent is None:
         raise HTTPException(
@@ -892,9 +749,8 @@ async def pdf_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         raise HTTPException(
             status_code=422, detail="The last message must be from the user."
         )
-    req_id = req.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
     return StreamingResponse(
-        stream_pdf_answer(agent, req.messages, request=request, req_id=req_id),
+        stream_pdf_answer(agent, req.messages),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

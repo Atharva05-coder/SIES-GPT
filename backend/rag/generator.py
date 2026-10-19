@@ -768,14 +768,12 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     return main_text
 
 
-def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None, cancel_event=None):
+def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None):
 
     def early_return(ret_text):
         if yield_callback:
             tokens = re.findall(r"\S+|\n|\s+", ret_text)
             for tok in tokens:
-                if cancel_event and cancel_event.is_set():
-                    return ""
                 yield_callback({"type": "token", "text": tok})
         return ret_text
 
@@ -1132,8 +1130,6 @@ ANSWER:
         {"role": "user", "content": prompt},
     ]
     if yield_callback:
-        if cancel_event and cancel_event.is_set():
-            return ""
         response = client.chat.completions.create(
             model="llama3.2:3b",
             messages=llm_messages,
@@ -1143,24 +1139,12 @@ ANSWER:
             extra_body={"options": {"num_ctx": 8192}}
         )
         answer_chunks = []
-        try:
-            for chunk in response:
-                if cancel_event and cancel_event.is_set():
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-                    return ""
-                if chunk.choices and chunk.choices[0].delta:
-                    text = chunk.choices[0].delta.content
-                    if text:
-                        answer_chunks.append(text)
-                        yield_callback({"type": "token", "text": text})
-        finally:
-            try:
-                response.close()
-            except Exception:
-                pass
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta:
+                text = chunk.choices[0].delta.content
+                if text:
+                    answer_chunks.append(text)
+                    yield_callback({"type": "token", "text": text})
         answer = "".join(answer_chunks)
     else:
         response = client.chat.completions.create(

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from "react";
-import { streamChat, cancelChat } from "../api";
+import { streamChat } from "../api";
 import type { ChatMessage, StreamEvent } from "../types";
 
 export type ChatSession = {
@@ -39,7 +39,6 @@ export function useChat() {
   const [activeChatId, setActiveChatId] = useState<string | null>(() => localStorage.getItem(ACTIVE_CHAT_KEY));
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const currentRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -148,9 +147,6 @@ export function useChat() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const reqId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      currentRequestIdRef.current = reqId;
-
       const onEvent = (e: StreamEvent) => {
         switch (e.type) {
           case "token":
@@ -174,7 +170,7 @@ export function useChat() {
       };
 
       try {
-        await streamChat(history, onEvent, controller.signal, reqId);
+        await streamChat(history, onEvent, controller.signal);
       } catch (err) {
         const aborted = err instanceof DOMException && err.name === "AbortError";
         if (!aborted) {
@@ -185,20 +181,12 @@ export function useChat() {
         patchLast((m) => ({ ...m, streaming: false, status: undefined }));
         setBusy(false);
         abortRef.current = null;
-        currentRequestIdRef.current = null;
       }
     },
     [chats, activeChatId, busy, patchLast, createNewChat],
   );
 
-  const stop = useCallback(() => {
-    const activeReqId = currentRequestIdRef.current;
-    abortRef.current?.abort();
-    if (activeReqId) {
-      cancelChat(activeReqId);
-      currentRequestIdRef.current = null;
-    }
-  }, []);
+  const stop = useCallback(() => abortRef.current?.abort(), []);
 
   const clear = useCallback(() => {
     if (activeChatId) {
