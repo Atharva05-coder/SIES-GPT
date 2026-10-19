@@ -50,7 +50,7 @@ export function Header({ settings, onThemeChange, onThemeReset, onToggleMode, on
               </button>
             )}
             <span>
-                <img src="favicon.svg" height={30} width={30}/>
+                <img src="/favicon.png" alt="Campus AI" height={30} width={30} style={{ borderRadius: "6px", objectFit: "contain" }} />
             </span>
             <span className="brand-name">Campus AI</span>
           </div>

@@ -16,6 +16,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from rag.rag_pipeline import ask_sies_gpt
 from dotenv import load_dotenv
 
@@ -259,6 +260,9 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
 async def stream_answer(
     agent: Any, index: sa.SiteIndex, messages: list[Msg]
 ) -> AsyncIterator[str]:
+    start_time = time.perf_counter()
+    first_token_time: float | None = None
+    token_count = 0
     answer: list[str] = []
     searches: list[list[str]] = []
     reads: list[str] = []
@@ -356,6 +360,9 @@ async def stream_answer(
             event = item
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
+                    if first_token_time is None:
+                        first_token_time = time.perf_counter()
+                    token_count += 1
                     answer.append(event.data.delta)
                     yield sse("token", text=event.data.delta)
 
@@ -400,6 +407,18 @@ async def stream_answer(
                 sources.append(s)
         if sources:
             yield sse("sources", sources=sources)
+        total_time = round(time.perf_counter() - start_time, 2)
+        ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
+        gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
+        tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
+        yield sse(
+            "benchmark",
+            total_time=total_time,
+            ttft=ttft,
+            tokens=token_count,
+            tokens_per_sec=tok_per_sec,
+            route="Website Agent",
+        )
         yield sse("done")
     except MaxTurnsExceeded:
         yield sse(
@@ -417,6 +436,9 @@ async def stream_answer(
 async def stream_pdf_answer(
     agent: Any, messages: list[Msg]
 ) -> AsyncIterator[str]:
+    start_time = time.perf_counter()
+    first_token_time: float | None = None
+    token_count = 0
     answer: list[str] = []
     pdf_sources: list[dict[str, str]] = []
     try:
@@ -437,6 +459,9 @@ async def stream_pdf_answer(
         async for event in result.stream_events():
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
+                    if first_token_time is None:
+                        first_token_time = time.perf_counter()
+                    token_count += 1
                     answer.append(event.data.delta)
                     yield sse("token", text=event.data.delta)
 
@@ -457,6 +482,18 @@ async def stream_pdf_answer(
 
         if pdf_sources:
             yield sse("sources", sources=pdf_sources[:MAX_SOURCES])
+        total_time = round(time.perf_counter() - start_time, 2)
+        ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
+        gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
+        tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
+        yield sse(
+            "benchmark",
+            total_time=total_time,
+            ttft=ttft,
+            tokens=token_count,
+            tokens_per_sec=tok_per_sec,
+            route="PDF Documents",
+        )
         yield sse("done")
     except MaxTurnsExceeded:
         yield sse(
@@ -638,6 +675,9 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
     if intent == "syllabus":
 
         async def stream_syllabus():
+            start_time = time.perf_counter()
+            first_token_time: float | None = None
+            token_count = 0
             try:
                 yield sse("tool_call", name="search_syllabus") + f": {' ' * 2048}\n\n"
 
@@ -700,8 +740,23 @@ async def smart_chat(req: ChatRequest) -> StreamingResponse:
                             if grouped_sources:
                                 yield sse("sources", sources=grouped_sources)
                         elif item["type"] == "token":
+                            if first_token_time is None:
+                                first_token_time = time.perf_counter()
+                            token_count += 1
                             yield sse("token", text=item["text"])
 
+                total_time = round(time.perf_counter() - start_time, 2)
+                ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
+                gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
+                tok_per_sec = round(token_count / gen_time, 1) if token_count else 0.0
+                yield sse(
+                    "benchmark",
+                    total_time=total_time,
+                    ttft=ttft,
+                    tokens=token_count,
+                    tokens_per_sec=tok_per_sec,
+                    route="Syllabus RAG",
+                )
                 yield sse("done")
             except Exception as e:
                 log.exception("Syllabus stream failed")

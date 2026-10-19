@@ -147,9 +147,17 @@ export function useChat() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const reqStartTime = performance.now();
+      let clientFirstTokenTime: number | null = null;
+      let clientTokenCount = 0;
+
       const onEvent = (e: StreamEvent) => {
         switch (e.type) {
           case "token":
+            if (clientFirstTokenTime === null) {
+              clientFirstTokenTime = performance.now();
+            }
+            clientTokenCount++;
             patchLast((m) => ({ ...m, content: m.content + e.text, status: undefined }));
             break;
           case "tool_call":
@@ -160,6 +168,18 @@ export function useChat() {
             break;
           case "sources":
             patchLast((m) => ({ ...m, sources: e.sources }));
+            break;
+          case "benchmark":
+            patchLast((m) => ({
+              ...m,
+              benchmark: {
+                totalTime: e.total_time ?? Number(((performance.now() - reqStartTime) / 1000).toFixed(2)),
+                ttft: e.ttft ?? (clientFirstTokenTime ? Number(((clientFirstTokenTime - reqStartTime) / 1000).toFixed(2)) : undefined),
+                tokens: e.tokens ?? clientTokenCount,
+                tokensPerSecond: e.tokens_per_sec,
+                route: e.route,
+              },
+            }));
             break;
           case "error":
             patchLast((m) => ({ ...m, error: e.message }));
@@ -178,7 +198,26 @@ export function useChat() {
           patchLast((m) => ({ ...m, error: message }));
         }
       } finally {
-        patchLast((m) => ({ ...m, streaming: false, status: undefined }));
+        patchLast((m) => {
+          if (!m.benchmark && m.content) {
+            const elapsed = Number(((performance.now() - reqStartTime) / 1000).toFixed(2));
+            const ttft = clientFirstTokenTime ? Number(((clientFirstTokenTime - reqStartTime) / 1000).toFixed(2)) : elapsed;
+            const genSecs = clientFirstTokenTime ? Math.max(0.05, (performance.now() - clientFirstTokenTime) / 1000) : elapsed;
+            const tps = Number((clientTokenCount / genSecs).toFixed(1));
+            return {
+              ...m,
+              streaming: false,
+              status: undefined,
+              benchmark: {
+                totalTime: elapsed,
+                ttft,
+                tokens: clientTokenCount,
+                tokensPerSecond: tps,
+              },
+            };
+          }
+          return { ...m, streaming: false, status: undefined };
+        });
         setBusy(false);
         abortRef.current = null;
       }
