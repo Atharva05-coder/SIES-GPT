@@ -404,6 +404,18 @@ def parse_requested_modules(query: str, total_modules: int = 6) -> list[int]:
     return []
 
 
+def format_self_learning_text(text: str) -> str:
+    if not text:
+        return ""
+    if "**Self-learning Topics:**" in text:
+        return text
+    return re.sub(
+        r"(?i)\s*(?:\.|\b)\s*Self-?Learning(?:\s*topics?)?\s*:\s*",
+        r".\n\n**Self-learning Topics:**\n",
+        text,
+    )
+
+
 def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
     if not retrieved_chunks:
         return None
@@ -470,18 +482,6 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
 
     if not matched_modules:
         return None
-
-def format_self_learning_text(text: str) -> str:
-    if not text:
-        return ""
-    if "**Self-learning Topics:**" in text:
-        return text
-    return re.sub(
-        r"(?i)\s*(?:\.|\b)\s*Self-?Learning(?:\s*topics?)?\s*:\s*",
-        r".\n\n**Self-learning Topics:**\n",
-        text,
-    )
-
 
     if len(matched_modules) > 1:
         mod_str = ", ".join(f"Module {m['number']}" for m in matched_modules[:-1]) + f" and Module {matched_modules[-1]['number']}"
