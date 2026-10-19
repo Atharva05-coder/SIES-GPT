@@ -291,49 +291,90 @@ def parse_num_token(tok: str) -> int | None:
     return None
 
 
-def parse_experiment_range(query: str) -> tuple[int, int]:
-    m_range = re.search(r"\b(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
-    if m_range:
-        n1 = parse_num_token(m_range.group(1))
-        n2 = parse_num_token(m_range.group(2))
-        if n1 is not None and n2 is not None:
-            return (min(n1, n2), max(n1, n2))
+def parse_requested_experiments(query: str, available_keys: list[int] | None = None) -> list[int] | None:
+    avail = sorted(available_keys) if available_keys else list(range(1, 51))
+    max_k = max(avail) if avail else 10
 
-    m_between = re.search(r"\bbetween\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s+and\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
-    if m_between:
-        n1 = parse_num_token(m_between.group(1))
-        n2 = parse_num_token(m_between.group(2))
-        if n1 is not None and n2 is not None:
-            return (min(n1, n2), max(n1, n2))
+    # 1. 'last N' / 'final N' experiments
+    m_last = re.search(r'\b(?:last|final)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:experiments?|practicals?|tasks?|exp\.?)\b', query, re.I)
+    if m_last:
+        n = parse_num_token(m_last.group(1))
+        if n and n > 0:
+            if available_keys:
+                return avail[-n:]
+            return list(range(max(1, max_k - n + 1), max_k + 1))
 
-    m_first = re.search(r"\b(?:first|top)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
+    # 2. 'first N' / 'top N' / 'fist N' experiments
+    m_first = re.search(r'\b(?:first|fist|top|initial|starting)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:experiments?|practicals?|tasks?|exp\.?)\b', query, re.I)
     if m_first:
         n = parse_num_token(m_first.group(1))
-        if n is not None:
-            return (1, n)
+        if n and n > 0:
+            if available_keys:
+                return avail[:n]
+            return list(range(1, n + 1))
 
-    m_single = re.search(r"\b(?:experiments?|practicals?|tasks?|exp\.?)\s*(?:no\.?|#)?\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b", query, re.IGNORECASE)
-    if m_single:
-        n = parse_num_token(m_single.group(1))
-        if n is not None:
-            return (n, n)
-
-    m_nth = re.search(r"\b(\d+(?:st|nd|rd|th)?|[a-z]+)\s+(?:experiments?|practicals?|tasks?)\b", query, re.IGNORECASE)
-    if m_nth:
-        n = parse_num_token(m_nth.group(1))
-        if n is not None:
-            return (n, n)
-
-def parse_requested_modules(query: str) -> list[int]:
-    m_range = re.search(r'\bmodules?\s*(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b', query, re.I)
-    if m_range:
-        v1 = re.sub(r'(?:st|nd|rd|th)$', '', m_range.group(1).lower())
-        v2 = re.sub(r'(?:st|nd|rd|th)$', '', m_range.group(2).lower())
-        n1 = WORD_TO_NUM.get(v1, int(v1) if v1.isdigit() else None)
-        n2 = WORD_TO_NUM.get(v2, int(v2) if v2.isdigit() else None)
+    # 3. Range: 'experiments from 2 to 5', 'between 3 and 7'
+    m_range = re.search(r'\b(?:experiments?|practicals?|tasks?|exp\.?)?\s*(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b', query, re.I)
+    if m_range and ('to' in query.lower() or '-' in query or 'through' in query):
+        n1 = parse_num_token(m_range.group(1))
+        n2 = parse_num_token(m_range.group(2))
         if n1 and n2:
             return list(range(min(n1, n2), max(n1, n2) + 1))
 
+    # 4. Multiple discrete numbers/ordinals: e.g. '2nd, 5th and 7th experiments', '2nd,5th and 7th'
+    m_before = re.search(r'([0-9a-z,\s&/-]+)\s+(?:experiments?|practicals?|tasks?|exp\.?)\b', query, re.I)
+    if m_before:
+        before_str = m_before.group(1)
+        tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', before_str, re.I)
+        nums = []
+        for t in tokens:
+            val = parse_num_token(t)
+            if val and 1 <= val <= 50:
+                nums.append(val)
+        if nums:
+            return sorted(list(dict.fromkeys(nums)))
+
+    # Check text after 'experiments': e.g. 'experiments 2, 5 and 7'
+    m_after = re.search(r'\b(?:experiments?|practicals?|tasks?|exp\.?)\s*(?:no\.?|#)?\s*([0-9a-z,\s&/-]+)', query, re.I)
+    if m_after:
+        after_str = m_after.group(1)
+        after_str = re.split(r'\b(?:of|in|for|from|with)\b', after_str, flags=re.I)[0]
+        tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', after_str, re.I)
+        nums = []
+        for t in tokens:
+            val = parse_num_token(t)
+            if val and 1 <= val <= 50:
+                nums.append(val)
+        if nums:
+            return sorted(list(dict.fromkeys(nums)))
+
+    return None
+
+
+def parse_requested_modules(query: str, total_modules: int = 6) -> list[int]:
+    # 1. 'first N' / 'fist N' / 'top N' / 'initial N' modules
+    m_first = re.search(r'\b(?:first|fist|top|initial|starting)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s+modules?\b', query, re.I)
+    if m_first:
+        n = parse_num_token(m_first.group(1))
+        if n and 1 <= n <= 10:
+            return list(range(1, n + 1))
+
+    # 2. 'last N' / 'final N' modules
+    m_last = re.search(r'\b(?:last|final)\s+(\d+(?:st|nd|rd|th)?|[a-z]+)\s+modules?\b', query, re.I)
+    if m_last:
+        n = parse_num_token(m_last.group(1))
+        if n and 1 <= n <= 10:
+            return list(range(max(1, total_modules - n + 1), total_modules + 1))
+
+    # 3. Range: 'modules from 1 to 3', 'module 2 to 4'
+    m_range = re.search(r'\bmodules?\s*(?:from\s+)?(\d+(?:st|nd|rd|th)?|[a-z]+)\s*(?:to|-|through)\s*(\d+(?:st|nd|rd|th)?|[a-z]+)\b', query, re.I)
+    if m_range:
+        n1 = parse_num_token(m_range.group(1))
+        n2 = parse_num_token(m_range.group(2))
+        if n1 and n2:
+            return list(range(min(n1, n2), max(n1, n2) + 1))
+
+    # 4. Numbers after 'module(s)': e.g. 'module 3 and 6', 'modules 1, 2, and 4', 'module 2'
     m_after = re.search(r'\bmodules?\s*(?:no\.?|#)?\s*([0-9a-z,\s&/-]+)', query, re.I)
     if m_after:
         after_str = m_after.group(1)
@@ -341,25 +382,22 @@ def parse_requested_modules(query: str) -> list[int]:
         tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', after_str, re.I)
         nums = []
         for t in tokens:
-            clean = re.sub(r'(?:st|nd|rd|th)$', '', t.lower())
-            if clean in WORD_TO_NUM:
-                nums.append(WORD_TO_NUM[clean])
-            elif clean.isdigit() and 1 <= int(clean) <= 10:
-                nums.append(int(clean))
+            val = parse_num_token(t)
+            if val and 1 <= val <= 10:
+                nums.append(val)
         if nums:
             return sorted(list(dict.fromkeys(nums)))
 
+    # 5. Numbers before 'module(s)': e.g. '3rd and 6th module', '2nd module', '2nd, 4th and 5th module'
     m_before = re.search(r'([0-9a-z,\s&/-]+)\s+modules?\b', query, re.I)
     if m_before:
         before_str = m_before.group(1)
         tokens = re.findall(r'\b(\d+(?:st|nd|rd|th)?|[a-z]+)\b', before_str, re.I)
         nums = []
         for t in tokens:
-            clean = re.sub(r'(?:st|nd|rd|th)$', '', t.lower())
-            if clean in WORD_TO_NUM:
-                nums.append(WORD_TO_NUM[clean])
-            elif clean.isdigit() and 1 <= int(clean) <= 10:
-                nums.append(int(clean))
+            val = parse_num_token(t)
+            if val and 1 <= val <= 10:
+                nums.append(val)
         if nums:
             return sorted(list(dict.fromkeys(nums)))
 
@@ -371,15 +409,6 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
         return None
 
     m_unit = re.search(r'\bunit\s*(\d+\.\d+)\b', query, re.I)
-    req_modules = parse_requested_modules(query)
-
-    if not req_modules and not m_unit:
-        return None
-
-    # Don't intercept if query is explicitly asking for whole syllabus / overview
-    if re.search(r"\b(all modules|full syllabus|complete syllabus|overall syllabus)\b", query, re.I):
-        return None
-
     target_code = None
     for item in retrieved_chunks:
         meta = item.get("metadata", {})
@@ -399,6 +428,16 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
     section = sections[target_code]
     course_name = extract_course_name_from_header(section["header"])
     outlines = section.get("module_outlines", [])
+
+    total_mods = len(outlines) if outlines else 6
+    req_modules = parse_requested_modules(query, total_modules=total_mods)
+
+    if not req_modules and not m_unit:
+        return None
+
+    # Don't intercept if query is explicitly asking for whole syllabus / overview
+    if re.search(r"\b(all modules|full syllabus|complete syllabus|overall syllabus)\b", query, re.I):
+        return None
 
     if m_unit:
         req_unit = m_unit.group(1)
@@ -432,7 +471,11 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
     if not matched_modules:
         return None
 
-    mod_str = " and ".join(f"Module {m['number']}" for m in matched_modules)
+    if len(matched_modules) > 1:
+        mod_str = ", ".join(f"Module {m['number']}" for m in matched_modules[:-1]) + f" and Module {matched_modules[-1]['number']}"
+    else:
+        mod_str = f"Module {matched_modules[0]['number']}"
+
     header = f"### {target_code}: {course_name} ({mod_str})\n\n"
     module_texts = [m["text"] for m in matched_modules]
     return header + "\n\n---\n\n".join(module_texts)
@@ -570,44 +613,52 @@ def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
             return f"According to the syllabus, students are required to complete at least {at_least_count} experiments from the {total_listed} listed experiments for this lab."
         return f"According to the syllabus, there are {total_listed} experiments listed for this lab."
 
-    start_idx, end_idx = parse_experiment_range(query)
+    avail_keys = sorted(all_experiments.keys())
+    req_keys = parse_requested_experiments(query, avail_keys)
+    if req_keys is not None:
+        target_keys = [k for k in avail_keys if k in req_keys]
+    else:
+        target_keys = avail_keys
+
     is_short_list = bool(re.search(r"\blist\b", query, re.IGNORECASE) and not re.search(r"\b(detail|describe|task|all)\b", query, re.IGNORECASE))
 
     exp_blocks = []
-    for k in sorted(all_experiments.keys()):
-        if start_idx <= k <= end_idx:
-            raw_lines = all_experiments[k]["full"]
-            formatted_lines = []
-            for raw_l in raw_lines:
-                l_str = raw_l.strip()
-                if not l_str:
-                    continue
-                if not formatted_lines:
-                    formatted_lines.append(l_str)
-                    continue
-                prev = formatted_lines[-1]
-                is_list_item = bool(re.match(r"^([-*o\u2022]\s|[a-z]\)|\d+\.|Tasks?:)", l_str, re.IGNORECASE))
-                prev_ends_sentence = bool(re.search(r"[\.:;!?]$", prev))
-                if not is_list_item and not prev_ends_sentence:
-                    formatted_lines[-1] = prev + " " + l_str
-                else:
-                    formatted_lines.append(l_str)
-
-            header = re.sub(r"^\d+[\.\)]\s*", "", formatted_lines[0])
-
-            if is_short_list or len(formatted_lines) == 1:
-                exp_blocks.append(f"- **Experiment {k}**: {header}")
+    for k in target_keys:
+        raw_lines = all_experiments[k]["full"]
+        formatted_lines = []
+        for raw_l in raw_lines:
+            l_str = raw_l.strip()
+            if not l_str:
+                continue
+            if not formatted_lines:
+                formatted_lines.append(l_str)
+                continue
+            prev = formatted_lines[-1]
+            is_list_item = bool(re.match(r"^([-*o\u2022]\s|[a-z]\)|\d+\.|Tasks?:)", l_str, re.IGNORECASE))
+            prev_ends_sentence = bool(re.search(r"[\.:;!?]$", prev))
+            if not is_list_item and not prev_ends_sentence:
+                formatted_lines[-1] = prev + " " + l_str
             else:
-                body = "\n".join(formatted_lines[1:])
-                exp_blocks.append(f"- **Experiment {k}**: {header}\n\n  {body}")
+                formatted_lines.append(l_str)
+
+        header = re.sub(r"^\d+[\.\)]\s*", "", formatted_lines[0])
+
+        if is_short_list or len(formatted_lines) == 1:
+            exp_blocks.append(f"- **Experiment {k}**: {header}")
+        else:
+            body = "\n".join(formatted_lines[1:])
+            exp_blocks.append(f"- **Experiment {k}**: {header}\n\n  {body}")
 
     if not exp_blocks:
         return None
 
-    if start_idx == end_idx:
-        intro = f"Here is Experiment {start_idx} from the syllabus:\n\n"
-    elif start_idx > 1 or end_idx < 50:
-        intro = f"Here are experiments {start_idx} to {end_idx} from the syllabus:\n\n"
+    if len(target_keys) == 1:
+        intro = f"Here is Experiment {target_keys[0]} from the syllabus:\n\n"
+    elif target_keys == list(range(min(target_keys), max(target_keys) + 1)) and len(target_keys) < len(avail_keys):
+        intro = f"Here are experiments {min(target_keys)} to {max(target_keys)} from the syllabus:\n\n"
+    elif len(target_keys) < len(avail_keys):
+        s_nums = ", ".join(str(k) for k in target_keys[:-1]) + f" and {target_keys[-1]}"
+        intro = f"Here are experiments {s_nums} from the syllabus:\n\n"
     else:
         intro = "Here are the experiments from the syllabus:\n\n"
 
