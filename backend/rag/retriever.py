@@ -20,9 +20,9 @@ OUTLINE_REQUEST = re.compile(
     re.IGNORECASE,
 )
 LAB_REQUEST = re.compile(r"\b(labs?|practicals?|experiments?)\b", re.IGNORECASE)
-SEMESTER_TOKEN = r"(?:VIII|VII|VI|V|IV|III|II|I|[1-8])"
+SEMESTER_TOKEN = r"(?:VIII|VII|VI|V|IV|III|II|I|[1-8](?:st|nd|rd|th)?)"
 SEMESTER_MARKER = re.compile(
-    rf"\b(?:semester|sem)\s*[-:#]?\s*({SEMESTER_TOKEN})\b",
+    rf"\b(?:semester|sem)\s*[-:#]?\s*({SEMESTER_TOKEN})\b|\b({SEMESTER_TOKEN})\s*(?:semester|sem)\b",
     re.IGNORECASE,
 )
 SEMESTER_RANGE = re.compile(
@@ -160,11 +160,16 @@ def _tokenize(text: str) -> list[str]:
     ]
 
 
-def _semester_number(token: str) -> int:
-    normalized = token.upper()
-    if normalized in SEMESTER_ROMANS:
-        return SEMESTER_ROMANS[normalized]
-    return int(normalized)
+def _semester_number(token: str | None) -> int:
+    if not token:
+        return 0
+    clean = re.sub(r"(?:st|nd|rd|th)$", "", token, flags=re.I).strip().upper()
+    if clean in SEMESTER_ROMANS:
+        return SEMESTER_ROMANS[clean]
+    try:
+        return int(clean)
+    except ValueError:
+        return 0
 
 
 def _requested_semesters(question: str) -> list[int]:
@@ -175,9 +180,14 @@ def _requested_semesters(question: str) -> list[int]:
         low, high = sorted((first, last))
         return list(range(low, high + 1))
 
-    return [
-        _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(question)
-    ]
+    sems = []
+    for match in SEMESTER_MARKER.finditer(question):
+        tok = match.group(1) or match.group(2)
+        if tok:
+            n = _semester_number(tok)
+            if n > 0:
+                sems.append(n)
+    return sems
 
 
 @lru_cache(maxsize=1)
@@ -199,8 +209,9 @@ def _semester_structure_pages() -> tuple[dict, ...]:
             page_num = page.get("page_number")
             
             semesters = [
-                _semester_number(match.group(1)) for match in SEMESTER_MARKER.finditer(text)
-                if _semester_number(match.group(1)) > 0
+                _semester_number(m.group(1) or m.group(2))
+                for m in SEMESTER_MARKER.finditer(text)
+                if _semester_number(m.group(1) or m.group(2)) > 0
             ]
             
             if "Program Structure for" in text or page_num in [10, 12, 14, 16]:

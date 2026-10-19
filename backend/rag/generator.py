@@ -117,8 +117,10 @@ def extract_semester_electives(query: str, retrieved_chunks) -> str | None:
 def extract_semester_program_structure(query: str, retrieved_chunks) -> str | None:
     is_struct_query = bool(
         re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure)\b", query, re.IGNORECASE)
-        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8]|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:structure|subjects?|courses?|curriculum)\b", query, re.IGNORECASE)
-        or re.search(r"\b(?:structure|subjects?|courses?|curriculum)\b.*\b(?:sem(?:ester)?|term)\s*([1-8]|I|II|III|IV|V|VI|VII|VIII)\b", query, re.IGNORECASE)
+        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:structure|subjects?|courses?|curriculum)\b", query, re.IGNORECASE)
+        or re.search(r"\b(?:structure|subjects?|courses?|curriculum)\b.*\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b", query, re.IGNORECASE)
+        or re.search(r"\b(?:structure|subjects?|courses?|curriculum)\b.*\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b", query, re.IGNORECASE)
+        or re.search(r"\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b.*\b(?:structure|subjects?|courses?|curriculum)\b", query, re.IGNORECASE)
     )
     if not is_struct_query:
         return None
@@ -504,7 +506,7 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
     wants_modules = bool(
         re.search(r"\b(?:only\s+modules?|just\s+modules?|modules?\s+and\s+self-?learning|course\s+modules?|give\s+modules?|what\s+are\s+the\s+modules?|list\s+of\s+modules?|show\s+modules?|modules?\s+of)\b", query, re.I)
-        or re.search(r"\bmodules?\b", query, re.I)
+        or re.search(r"\b(modules?|chapters?|topics?\s+covered|topics?\s+in|course\s+content|course\s+outline)\b", query, re.I)
     )
     if not wants_modules:
         return None
@@ -537,18 +539,23 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
 
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
-    if not re.search(
+    has_book_kw = bool(re.search(
         r"\b(textbooks?|text\s*books?|reference\s*books?|references?|recommended\s*books?|online\s*references?|online\s*resources?|books?|reading\s*materials?|recommended\s*reading|bibliography)\b",
         query,
         re.IGNORECASE,
-    ):
+    ))
+    has_online_study_kw = bool(
+        re.search(r"\b(where\s+(?:can\s+i|to)\s+study|study\s+online|learn\s+online|online\s+material|online\s+links?|online\s+sources?)\b", query, re.IGNORECASE)
+        or (re.search(r"\bonline\b", query, re.IGNORECASE) and re.search(r"\b(study|learn|courses?|videos?|nptel|coursera|material|resources?|links?|references?|where)\b", query, re.IGNORECASE))
+    )
+    if not has_book_kw and not has_online_study_kw:
         return None
     if re.search(r"\b(experiments?|labs?|practicals?|modules?|scheme|outcomes?|objectives?)\b", query, re.IGNORECASE):
         return None
 
     is_only_online = bool(
-        re.search(r"\bonline\s+(?:references?|resources?)\b", query, re.IGNORECASE)
-        and not re.search(r"\b(textbooks?|books?|all|both)\b", query, re.IGNORECASE)
+        (has_online_study_kw or re.search(r"\bonline\b", query, re.IGNORECASE))
+        and not re.search(r"\b(textbooks?|text\s*books?|reference\s*books?|books?|all\s+references|both)\b", query, re.IGNORECASE)
     )
     is_only_textbooks = bool(
         re.search(r"\btext\s*books?\b", query, re.IGNORECASE)
@@ -582,7 +589,14 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
     course_prefix = ""
     if target_code and target_code in sections:
         cname = extract_course_name_from_header(sections[target_code]["header"])
-        course_prefix = f"### {target_code}: {cname} - Recommended Books & References\n\n"
+        if is_only_online:
+            course_prefix = f"### {target_code}: {cname} - Online References\n\n"
+        elif is_only_textbooks:
+            course_prefix = f"### {target_code}: {cname} - Textbooks\n\n"
+        elif is_only_references:
+            course_prefix = f"### {target_code}: {cname} - References\n\n"
+        else:
+            course_prefix = f"### {target_code}: {cname} - Recommended Books & References\n\n"
 
     for item in candidate_pages:
         text = item.get("text", "")
@@ -608,10 +622,10 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
         results = []
         if is_only_textbooks:
             if tb_text:
-                results.append(f"### Textbooks\n{tb_text}")
+                results.append(tb_text)
         elif is_only_online:
             if online_text:
-                results.append(f"### Online References\n{online_text}")
+                results.append(online_text)
         elif is_only_references:
             if ref_text:
                 results.append(f"### References\n{ref_text}")
@@ -626,7 +640,9 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
                 results.append(f"### Online References\n{online_text}")
 
         if results:
-            return course_prefix + "\n\n".join(results)
+            clean_res = "\n\n".join(results)
+            clean_res = re.sub(r"[^\x00-\x7F]+", '"', clean_res)
+            return course_prefix + clean_res
 
     return None
 
@@ -1055,6 +1071,109 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     return main_text
 
 
+def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None:
+    if not retrieved_chunks:
+        return None
+
+    if re.search(r"\b(credit\s+distribution|credits?\s+distribution|semester-?wise\s+credit|total\s+credits?\s+for\s+(?:the\s+)?(?:degree|b\.?tech|program|engineering))\b", query, re.I):
+        return None
+
+    if re.search(r"\b(modules?|chapters?|topics?|experiments?|practicals?|tasks?|syllabus|curriculum|prerequisites?)\b", query, re.I):
+        return None
+
+    wants_credits = bool(re.search(r"\b(credits?|how\s+many\s+credits?|credit\s+assigned|assigned\s+credits?)\b", query, re.I))
+    wants_teaching = bool(re.search(r"\b(teaching\s+scheme|contact\s+hours?|hours?\s+per\s+week|lecture\s+hours?)\b", query, re.I))
+    wants_exam = bool(re.search(r"\b(examination\s+scheme|exam\s+scheme|marks\s+distribution|evaluation\s+scheme|assessment\s+scheme|ise|mse|ese)\b", query, re.I))
+
+    if not (wants_credits or wants_teaching or wants_exam):
+        return None
+
+    target_code = None
+    for item in retrieved_chunks:
+        meta = item.get("metadata", {})
+        if meta.get("course_code"):
+            target_code = meta.get("course_code")
+            break
+
+    sections = get_sections_dict()
+    if not target_code:
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+        if code_match and code_match.group() in sections:
+            target_code = code_match.group()
+
+    if not target_code or target_code not in sections:
+        return None
+
+    section = sections[target_code]
+    p1_text = section["all_pages"][0]["text"]
+    course_name = extract_course_name_from_header(section["header"])
+    text_clean = re.sub(rf"\b{re.escape(target_code)}\b", "", p1_text)
+
+    # 1. Teaching Scheme & Credits
+    teaching_scheme = None
+    credits_assigned = None
+    m_teach = re.search(r"(?is)(?:Teaching\s*Scheme|Theory\s+Practical\s+Tutorial|Credits\s*Assigned).*?(?=\n\s*(?:Examination\s*Scheme|Pre-?requisite|Program\s*Outcomes)|\Z)", text_clean)
+    if m_teach:
+        block = m_teach.group(0)
+        header_match = re.search(r"(?i)(?:Tot\s*al|Total)", block)
+        sub_block = block[header_match.end():] if header_match else block
+        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        if len(nums) >= 6:
+            th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
+            th_c, pr_c, tu_c = nums[3], nums[4], nums[5]
+            tot_c = nums[6] if len(nums) >= 7 else nums[-1]
+            parts_h = []
+            if th_h not in ["--", "-", "0"]: parts_h.append(f"{th_h} (Theory)")
+            if pr_h not in ["--", "-", "0"]: parts_h.append(f"{pr_h} (Practical)")
+            if tu_h not in ["--", "-", "0"]: parts_h.append(f"{tu_h} (Tutorial)")
+            teaching_scheme = " + ".join(parts_h) if parts_h else "--"
+            credits_assigned = f"{tot_c}"
+        elif len(nums) >= 3:
+            teaching_scheme = f"{nums[0]} hrs (Theory)" if nums[0] not in ["--", "-"] else "--"
+            credits_assigned = f"{nums[-1]}"
+
+    # 2. Examination Scheme
+    exam_scheme = None
+    m_exam = re.search(r"(?is)Examination\s*Scheme.*?(?=\n\s*(?:Pre-?requisite|Program\s*Outcomes|Course\s*Objectives|Lab\s*Objectives|Exp\.?\s*No|Suggested\s*List|\*|\Z))", text_clean)
+    if m_exam:
+        block = m_exam.group(0)
+        header_end = re.search(r"(?i)(?:ISE\s+MSE|Total)", block)
+        sub_block = block[header_end.end():] if header_end else block
+        nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+        if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
+            ise, mse, ese, tot = nums[0], nums[1], nums[2], nums[3]
+            exam_scheme = f"ISE ({ise}), MSE ({mse}), ESE ({ese}) | Total: {tot}"
+        elif len(nums) >= 5:
+            ise, mse, ese = nums[0], nums[1], nums[2]
+            ciap, esep = nums[3], nums[4]
+            tot = nums[5] if len(nums) >= 6 else (nums[-1] if nums[-1] not in ["--", "-"] else "")
+            parts_e = []
+            if ise not in ["--", "-"]: parts_e.append(f"ISE ({ise})")
+            if mse not in ["--", "-"]: parts_e.append(f"MSE ({mse})")
+            if ese not in ["--", "-"]: parts_e.append(f"ESE ({ese})")
+            if ciap not in ["--", "-"]: parts_e.append(f"CIAP / Term Work ({ciap})")
+            if esep not in ["--", "-"]: parts_e.append(f"ESEP / Practical Exam ({esep})")
+            scheme_str = ", ".join(parts_e)
+            if tot and tot not in ["--", "-"]:
+                scheme_str += f" | Total: {tot}"
+            exam_scheme = scheme_str
+
+    details = []
+    if credits_assigned:
+        clean_cr = re.sub(r"[^\d]+", "", credits_assigned) or credits_assigned
+        details.append(f"- **Credits Assigned:** {clean_cr}")
+    if teaching_scheme:
+        details.append(f"- **Teaching Scheme:** {teaching_scheme}")
+    if exam_scheme:
+        details.append(f"- **Examination Scheme:** {exam_scheme}")
+
+    if not details:
+        return None
+
+    details_str = "\n".join(details)
+    return f"**Course Code:** {target_code}\n**Course Name:** {course_name}\n\n{details_str}"
+
+
 def generate_answer(question: str, retrieved_chunks, original_question: str = None, yield_callback=None, cancel_event=None):
 
     def early_return(ret_text):
@@ -1070,7 +1189,13 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     check_query = reframe_query(original_question if original_question else question)
 
     # Fast deterministic extractors (0.005s execution)
-    wants_structure = bool(re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure|structure)\b", check_query, re.I))
+    wants_structure = bool(
+        re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure|structure)\b", check_query, re.I)
+        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:subjects?|courses?|curriculum)\b", check_query, re.I)
+        or re.search(r"\b(?:subjects?|courses?|curriculum)\b.*\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b", check_query, re.I)
+        or re.search(r"\b(?:subjects?|courses?|curriculum)\b.*\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b", check_query, re.I)
+        or re.search(r"\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b.*\b(?:subjects?|courses?|curriculum)\b", check_query, re.I)
+    )
     wants_electives = bool(re.search(r"\b(electives?|elective options?|minors?|mdms?|multidisciplinary)\b", check_query, re.I))
 
     if wants_structure and wants_electives:
@@ -1109,6 +1234,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_all_modules = extract_course_all_modules_only(check_query, retrieved_chunks)
     if fast_all_modules:
         return early_return(fast_all_modules)
+
+    fast_scheme = extract_course_scheme_or_credits(check_query, retrieved_chunks)
+    if fast_scheme:
+        return early_return(fast_scheme)
 
     fast_info = extract_course_full_information(check_query, retrieved_chunks)
     if fast_info:

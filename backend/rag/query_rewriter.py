@@ -40,14 +40,14 @@ def reframe_query(query: str) -> str:
         r"\bQC\b": "Quantum Computing",
         r"\bRL\b": "Reinforcement Learning",
         r"\b(?:BC|BCT)\b": "Blockchain Technology",
-        r"\bsem(?:ester)? 1\b": "Semester I",
-        r"\bsem(?:ester)? 2\b": "Semester II",
-        r"\bsem(?:ester)? 3\b": "Semester III",
-        r"\bsem(?:ester)? 4\b": "Semester IV",
-        r"\bsem(?:ester)? 5\b": "Semester V",
-        r"\bsem(?:ester)? 6\b": "Semester VI",
-        r"\bsem(?:ester)? 7\b": "Semester VII",
-        r"\bsem(?:ester)? 8\b": "Semester VIII"
+        r"\b(?:1st|1)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:1|1st)\b": "Semester I",
+        r"\b(?:2nd|2)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:2|2nd)\b": "Semester II",
+        r"\b(?:3rd|3)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:3|3rd)\b": "Semester III",
+        r"\b(?:4th|4)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:4|4th)\b": "Semester IV",
+        r"\b(?:5th|5)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:5|5th)\b": "Semester V",
+        r"\b(?:6th|6)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:6|6th)\b": "Semester VI",
+        r"\b(?:7th|7)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:7|7th)\b": "Semester VII",
+        r"\b(?:8th|8)\s*sem(?:ester)?\b|\bsem(?:ester)?\s*(?:8|8th)\b": "Semester VIII",
     }
     for pattern, replacement in acronyms.items():
         query = re.sub(pattern, replacement, query, flags=re.IGNORECASE)
