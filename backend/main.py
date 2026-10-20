@@ -208,14 +208,79 @@ def sse(event_type: str, **data: Any) -> str:
     return f"data: {json.dumps({'type': event_type, **data})}\n\n"
 
 
+def extract_page_repr(
+    url: str,
+    p_obj: dict | None,
+    fallback_text: str,
+    hit_chunks: list[str],
+    max_chars: int = 4000,
+) -> str:
+    """
+    Extract high-value structured text from a page object or fallback string.
+    Ensures that for faculty profiles, basic bio, qualifications, and full employment
+    work experience are never dropped due to chunk truncation.
+    """
+    if not p_obj:
+        return fallback_text[:max_chars].strip()
+
+    lines = p_obj.get("lines", [])
+    if not lines:
+        return fallback_text[:max_chars].strip()
+
+    # Specialized structuring for faculty profiles to ensure bio, degrees, and full work experience are preserved
+    if "/faculty/" in url.lower():
+        nav_words = {
+            "courses", "publications", "papers", "participations",
+            "awards", "assignments", "achievements", "material url: view material"
+        }
+        header_lines: list[str] = []
+        exp_lines: list[str] = []
+        for l in lines:
+            l_strip = l.strip()
+            if not l_strip or l_strip.lower() in nav_words:
+                continue
+            if l_strip.startswith("From Date:"):
+                exp_lines.append(l_strip)
+            elif not exp_lines:
+                header_lines.append(l_strip)
+
+        parts: list[str] = []
+        if header_lines:
+            parts.append("### Basic Profile & Qualifications\n" + "\n".join(header_lines))
+        if exp_lines:
+            parts.append("### Professional Work Experience\n" + "\n".join(exp_lines))
+
+        base = "\n\n".join(parts)
+        remaining = max_chars - len(base)
+        if remaining > 300 and hit_chunks:
+            extra = []
+            for ch in hit_chunks:
+                sample = ch.split("\n")[0].strip()
+                if sample and sample not in base:
+                    extra.append(ch)
+            if extra:
+                base += "\n\n### Notable Activities, Publications & Research\n" + "\n\n".join(extra)[:remaining].strip()
+        return base.strip()
+
+    # Generic pages: if hit_chunks matched and page is long, prioritize hit_chunks; otherwise raw text
+    page_content = "\n".join(lines)
+    if hit_chunks and len(page_content) > max_chars:
+        intro = "\n".join(lines[:10])[:600].strip()
+        chunk_text = "\n\n".join(hit_chunks)
+        if intro and intro.split("\n")[0] not in chunk_text:
+            return (intro + "\n\n" + chunk_text)[:max_chars].strip()
+        return chunk_text[:max_chars].strip()
+    return page_content[:max_chars].strip()
+
+
 def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[str], list[str]]:
     """
     Guarantee read_page is called by doing it in Python before the LLM runs.
 
     Returns:
-        context_block  – formatted text to inject into the user message
-        searched_urls  – list of URLs returned by search
-        read_urls      – list of URLs whose full content was read
+        context_block  - formatted text to inject into the user message
+        searched_urls  - list of URLs returned by search
+        read_urls      - list of URLs whose full content was read
     """
     hits = index.search(query)
     if not hits:
@@ -232,43 +297,31 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     # Extract clean text directly from index without "[Truncated]" strings
     top_url = searched_urls[0]
     p_obj = index.pages.get(sa.normalize_url(top_url))
-    if p_obj:
-        page_lines = p_obj.get("lines", [])
-        page_content = "\n".join(page_lines)
-    else:
-        page_content = index.read_page(top_url)
-
-    # For large pages, prioritize the hit chunks that actually matched the query
+    fallback_text = index.read_page(top_url) if not p_obj else ""
     top_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == top_url and h.get("text")]
-    if top_hit_chunks and len(page_content) > 4000:
-        full_content = "\n\n".join(top_hit_chunks)[:4000].strip()
-    else:
-        full_content = page_content[:4000].strip()
+    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=4500)
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
         second_url = searched_urls[1]
         if second_url.rstrip("/") != top_url.rstrip("/"):
             p2_obj = index.pages.get(sa.normalize_url(second_url))
-            if p2_obj:
-                second_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == second_url and h.get("text")]
-                if second_hit_chunks and len("\n".join(p2_obj.get("lines", []))) > 2000:
-                    second_content = "\n\n".join(second_hit_chunks)[:1500].strip()
-                else:
-                    second_content = "\n".join(p2_obj.get("lines", []))[:1500].strip()
-                if second_content:
-                    full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
-                    read_urls.append(second_url)
+            fallback2 = index.read_page(second_url) if not p2_obj else ""
+            second_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == second_url and h.get("text")]
+            second_content = extract_page_repr(second_url, p2_obj, fallback2, second_hit_chunks, max_chars=1500)
+            if second_content:
+                full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
+                read_urls.append(second_url)
 
     if len(searched_urls) > 2:
         third_url = searched_urls[2]
         if third_url.rstrip("/") not in [top_url.rstrip("/"), second_url.rstrip("/")]:
             p3_obj = index.pages.get(sa.normalize_url(third_url))
-            if p3_obj:
-                third_content = "\n".join(p3_obj.get("lines", []))[:1000].strip()
-                if third_content:
-                    full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
-                    read_urls.append(third_url)
+            fallback3 = index.read_page(third_url) if not p3_obj else ""
+            third_content = extract_page_repr(third_url, p3_obj, fallback3, [], max_chars=1000)
+            if third_content:
+                full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
+                read_urls.append(third_url)
 
     context_block = (
         f"[PREFETCHED WEBSITE DATA — answer using this content]\n"
@@ -378,9 +431,11 @@ async def stream_answer(
                     f"{user_query}\n\n"
                     f"{context_block}\n\n"
                     "INSTRUCTIONS:\n"
-                    "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked (e.g., if asked about a person/faculty/HOD, highlight their designation, roles, academic qualifications, experience, contact email, and institutional/committee appointments; if asked about a cell/committee, provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs).\n"
+                    "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked.\n"
+                    "   - If asked about a faculty member/teacher/HOD/person: ALWAYS include their Designation & Department, Tenure, Contact Email, Academic Qualifications, and full Professional Work Experience / Employment History (listing all prior and current roles, institutions/organizations, and dates if provided in the data). Also include their notable publications, research domains, awards, or student/faculty programs if available.\n"
+                    "   - If asked about a cell/committee: provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs.\n"
                     "2. Avoid dumping unrelated sections or general college blurbs that do not directly answer the specific question.\n"
-                    "3. Use clean Markdown formatting: organize your response with clear section headings (e.g., ### Overview, ### Key Details, ### Objectives, ### Committee Members, ### Roles & Responsibilities), bold labels (`- **Field:** Value`), and bullet points.\n"
+                    "3. Use clean Markdown formatting: organize your response with clear section headings (e.g., ### Overview, ### Key Details, ### Academic Qualifications, ### Work Experience, ### Research & Publications, ### Awards & Honors), bold labels (`- **Field:** Value`), and bullet points.\n"
                     "4. For committees or teams, clearly list the Coordinator/Head followed by the members with their respective designations or departments.\n"
                     "5. Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page.\n"
                     "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
