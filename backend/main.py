@@ -37,6 +37,11 @@ from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel, Field
 
 ACTIVE_REQUESTS: dict[str, Callable[[], None]] = {}
+SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 CANCELLED_REQUESTS: set[str] = set()
 
 import site_agent as sa
@@ -308,6 +313,7 @@ async def stream_answer(
     request: Request | None = None,
     req_id: str | None = None,
 ) -> AsyncIterator[str]:
+    yield ": connected\n\n"
     start_time = time.perf_counter()
     first_token_time: float | None = None
     token_count = 0
@@ -611,6 +617,7 @@ async def stream_pdf_answer(
     request: Request | None = None,
     req_id: str | None = None,
 ) -> AsyncIterator[str]:
+    yield ": connected\n\n"
     start_time = time.perf_counter()
     first_token_time: float | None = None
     token_count = 0
@@ -825,7 +832,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     return StreamingResponse(
         stream_answer(agent, index, req.messages, request=request, req_id=req_id),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_HEADERS,
     )
 
 
@@ -964,7 +971,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         return StreamingResponse(
             iter([sse("done")]),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=SSE_HEADERS,
         )
 
     # Fast-path hybrid intent routing (instant: 0.0001s)
@@ -991,7 +998,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             return StreamingResponse(
                 iter([sse("done")]),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=SSE_HEADERS,
             )
         except Exception as e:
             if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
@@ -999,7 +1006,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 return StreamingResponse(
                     iter([sse("done")]),
                     media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                    headers=SSE_HEADERS,
                 )
             log.error(f"Intent classifier failed: {e}")
             crgx = get_syllabus_courses_regex()
@@ -1018,7 +1025,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         return StreamingResponse(
             iter([sse("done")]),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=SSE_HEADERS,
         )
 
     log.info(f"Routed query to: {intent} (req_id: {req_id})")
@@ -1026,6 +1033,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     if intent == "syllabus":
 
         async def stream_syllabus():
+            yield ": connected\n\n"
             start_time = time.perf_counter()
             first_token_time: float | None = None
             token_count = 0
@@ -1148,7 +1156,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         return StreamingResponse(
             stream_syllabus(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=SSE_HEADERS,
         )
 
     elif intent == "document":
@@ -1160,12 +1168,12 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             return StreamingResponse(
                 stream_answer(app_agent, index, req.messages, request=request, req_id=req_id),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers=SSE_HEADERS,
             )
         return StreamingResponse(
             stream_pdf_answer(pdf_agent, req.messages, request=request, req_id=req_id),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=SSE_HEADERS,
         )
 
     else:
@@ -1175,7 +1183,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
         return StreamingResponse(
             stream_answer(app_agent, index, req.messages, request=request, req_id=req_id),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=SSE_HEADERS,
         )
 
 
@@ -1195,7 +1203,7 @@ async def pdf_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     return StreamingResponse(
         stream_pdf_answer(agent, req.messages, request=request, req_id=req_id),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_HEADERS,
     )
 
 

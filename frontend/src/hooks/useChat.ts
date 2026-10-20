@@ -57,9 +57,9 @@ export function useChat() {
   const activeChat = chats.find(c => c.id === activeChatId);
   const messages = activeChat?.messages ?? [];
 
-  const patchLast = useCallback((fn: (m: ChatMessage) => ChatMessage) => {
+  const patchLastForChat = useCallback((chatId: string, fn: (m: ChatMessage) => ChatMessage) => {
     setChats(prev => {
-      const chatIndex = prev.findIndex(c => c.id === activeChatId);
+      const chatIndex = prev.findIndex(c => c.id === chatId);
       if (chatIndex === -1) return prev;
 
       const newChats = [...prev];
@@ -72,7 +72,7 @@ export function useChat() {
       newChats[chatIndex] = { ...chat, messages: updatedMessages, updatedAt: Date.now() };
       return newChats;
     });
-  }, [activeChatId]);
+  }, []);
 
   const createNewChat = useCallback(() => {
     const newChat: ChatSession = {
@@ -107,6 +107,8 @@ export function useChat() {
       if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
         currentChatId = createNewChat();
       }
+      const targetChatId = currentChatId;
+      const patch = (fn: (m: ChatMessage) => ChatMessage) => patchLastForChat(targetChatId, fn);
 
       const activeMsgs = chats.find(c => c.id === currentChatId)?.messages ?? [];
 
@@ -154,19 +156,19 @@ export function useChat() {
       const onEvent = (e: StreamEvent) => {
         switch (e.type) {
           case "token":
-            patchLast((m) => ({ ...m, content: m.content + e.text, status: undefined }));
+            patch((m) => ({ ...m, content: m.content + e.text, status: undefined }));
             break;
           case "tool_call":
-            patchLast((m) => ({ ...m, status: statusFor(e.name) }));
+            patch((m) => ({ ...m, status: statusFor(e.name) }));
             break;
           case "tool_output":
-            patchLast((m) => ({ ...m, status: "Reviewing results" }));
+            patch((m) => ({ ...m, status: "Reviewing results" }));
             break;
           case "sources":
-            patchLast((m) => ({ ...m, sources: e.sources }));
+            patch((m) => ({ ...m, sources: e.sources }));
             break;
           case "error":
-            patchLast((m) => ({ ...m, error: e.message }));
+            patch((m) => ({ ...m, error: e.message }));
             break;
           default:
             break;
@@ -179,16 +181,16 @@ export function useChat() {
         const aborted = err instanceof DOMException && err.name === "AbortError";
         if (!aborted) {
           const message = err instanceof Error ? err.message : "Request failed.";
-          patchLast((m) => ({ ...m, error: message }));
+          patch((m) => ({ ...m, error: message }));
         }
       } finally {
         currentRequestIdRef.current = null;
-        patchLast((m) => ({ ...m, streaming: false, status: undefined }));
+        patch((m) => ({ ...m, streaming: false, status: undefined }));
         setBusy(false);
         abortRef.current = null;
       }
     },
-    [chats, activeChatId, busy, patchLast, createNewChat],
+    [chats, activeChatId, busy, patchLastForChat, createNewChat],
   );
 
   const stop = useCallback(() => {

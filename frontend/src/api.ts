@@ -58,6 +58,7 @@ export async function streamChat(
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
 
     let boundary: number;
     while ((boundary = buffer.indexOf("\n\n")) !== -1) {
@@ -66,7 +67,7 @@ export async function streamChat(
       const line = frame.split("\n").find((l) => l.startsWith("data: "));
       if (!line) continue;
       try {
-        onEvent(JSON.parse(line.slice(6)) as StreamEvent);
+        onEvent(JSON.parse(line.slice(6).trim()) as StreamEvent);
       } catch {
         /* ignore a malformed frame */
       }
