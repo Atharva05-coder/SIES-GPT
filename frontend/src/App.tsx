@@ -1,158 +1,53 @@
 import { useState } from "react";
-import "./App.css";
+import { Composer } from "./components/Composer";
+import { Header } from "./components/Header";
+import { MessageList } from "./components/MessageList";
+import { Notice } from "./components/Notice";
+import { Sidebar } from "./components/Sidebar";
+import { useChat } from "./hooks/useChat";
+import { useHealth } from "./hooks/useHealth";
+import { useTheme } from "./theme";
 
-import Sidebar from "./components/Sidebar";
-import Header from "./components/Header";
-import WelcomeScreen from "./components/WelcomeScreen";
-import ChatMessage from "./components/ChatMessage";
-import ChatInput from "./components/ChatInput";
-
-interface Message {
-  role: "user" | "ai";
-  content: string;
-}
-
-function App() {
-
-  const [message, setMessage] = useState("");
-
-  const [messages, setMessages] = useState<Message[]>([]);
-
-
- const handleSend = async () => {
-  if (!message.trim()) return;
-
-  const userMessage = message.trim();
-
-  setMessages((prev) => [
-    ...prev,
-    {
-      role: "user",
-      content: userMessage,
-    },
-  ]);
-
-  setMessage("");
-
-  try {
-    const response = await fetch(
-      "http://localhost:8000/chat",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          message: userMessage,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error("Failed to get response");
-    }
-
-    const data = await response.json();
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "ai",
-        content: data.answer,
-      },
-    ]);
-
-  } catch (error) {
-
-    console.error(error);
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "ai",
-        content:
-          "Sorry, I couldn't connect to the SIES GPT server.",
-      },
-    ]);
-  }
-};
-
-
-  const handleNewChat = () => {
-    setMessages([]);
-    setMessage("");
-  };
-
-
-  const handleSuggestionClick = (question: string) => {
-    setMessage(question);
-  };
-
+export default function App() {
+  const { settings, update, toggleMode, reset } = useTheme();
+  const { health, unreachable } = useHealth();
+  const { messages, busy, send, stop, clear, chats, activeChatId, createNewChat, selectChat, deleteChat } = useChat();
+  const ready = Boolean(health?.ready) && !unreachable;
+  
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="app">
-
-      {/* SIDEBAR */}
-
-      <Sidebar
-        onNewChat={handleNewChat}
+    <>
+      <div className="backdrop" aria-hidden="true" />
+      <Sidebar 
+        chats={chats}
+        activeChatId={activeChatId}
+        onSelectChat={selectChat}
+        onNewChat={createNewChat}
+        onDeleteChat={deleteChat}
+        isOpen={sidebarOpen}
+        setIsOpen={setSidebarOpen}
       />
-
-
-      {/* MAIN */}
-
-      <main className="main-content">
-
-        {/* HEADER */}
-
+      <div className="shell">
         <Header
-          onMenuClick={() => {}}
+          settings={settings}
+          onThemeChange={update}
+          onThemeReset={reset}
+          onToggleMode={toggleMode}
+          onMenuClick={() => setSidebarOpen(true)}
         />
+        <Notice health={health} unreachable={unreachable} />
+        <MessageList messages={messages} onPick={send} disabled={!ready || busy} />
 
-
-        {/* CHAT */}
-
-        <section className="chat-area">
-
-          {messages.length === 0 ? (
-
-            <WelcomeScreen
-              onSuggestionClick={handleSuggestionClick}
-            />
-
-          ) : (
-
-            <div className="messages">
-
-              {messages.map((msg, index) => (
-
-                <ChatMessage
-                  key={index}
-                  role={msg.role}
-                  content={msg.content}
-                />
-
-              ))}
-
-            </div>
-
-          )}
-
-        </section>
-
-
-        {/* INPUT */}
-
-        <ChatInput
-          message={message}
-          setMessage={setMessage}
-          onSend={handleSend}
+        <Composer
+          busy={busy}
+          ready={ready}
+          canClear={messages.length > 0}
+          onSend={send}
+          onStop={stop}
+          onClear={clear}
         />
-
-      </main>
-
-    </div>
+      </div>
+    </>
   );
 }
-
-export default App;
