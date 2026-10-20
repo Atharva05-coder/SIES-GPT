@@ -1071,6 +1071,105 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     return main_text
 
 
+def extract_end_semester_examination_pattern(query: str, retrieved_chunks) -> str | None:
+    # Check if query asks for ESE / end semester examination pattern
+    ese_kw = bool(re.search(r"\b(ese|end\s*sem(?:ester)?(?:\s*exam(?:ination)?)?|question\s*paper\s*pattern|exam(?:ination)?\s*pattern)\b", query, re.I))
+    if not ese_kw:
+        return None
+
+    # Do not intercept if query is asking specifically for modules, textbooks, or lab experiments
+    if re.search(r"\b(modules?|chapters?|units?|textbooks?|experiments?|practicals?|lab\b)", query, re.I):
+        return None
+
+    sections = get_sections_dict()
+
+    # Helper to find if an explicit course is in query
+    def find_course_in_q(q: str):
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", q.upper())
+        if code_match and code_match.group() in sections:
+            return code_match.group()
+        q_low = q.lower()
+        best = None
+        best_len = 0
+        for code, sec in sections.items():
+            cname = extract_course_name_from_header(sec["header"]).lower()
+            cname_clean = re.sub(r"\(.*?\)", "", cname).strip()
+            if len(cname_clean) > 4 and cname_clean in q_low:
+                if len(cname_clean) > best_len:
+                    best = code
+                    best_len = len(cname_clean)
+        return best
+
+    target_code = find_course_in_q(query)
+
+    if target_code and target_code in sections:
+        sec = sections[target_code]
+        course_name = extract_course_name_from_header(sec["header"])
+
+        # Check if exam scheme summary exists on page 0
+        scheme_summary = ""
+        p1_text = sec["all_pages"][0]["text"]
+        text_clean = re.sub(rf"\b{re.escape(target_code)}\b", "", p1_text)
+        m_exam = re.search(r"(?is)Examination\s*Scheme.*?(?=\n\s*(?:Pre-?requisite|Program\s*Outcomes|Course\s*Objectives|Lab\s*Objectives|Exp\.?\s*No|Suggested\s*List|\*|\Z))", text_clean)
+        if m_exam:
+            block = m_exam.group(0)
+            header_end = re.search(r"(?i)(?:ISE\s+MSE|Total)", block)
+            sub_block = block[header_end.end():] if header_end else block
+            nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+            if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
+                scheme_summary = f"- **Examination Scheme:** ISE ({nums[0]}), MSE ({nums[1]}), ESE ({nums[2]}) | **Total:** {nums[3]} marks\n"
+            elif len(nums) >= 5:
+                ise, mse, ese = nums[0], nums[1], nums[2]
+                ciap, esep = nums[3], nums[4]
+                tot = nums[5] if len(nums) >= 6 else "100"
+                parts = []
+                if ise not in ["--", "-"]: parts.append(f"ISE ({ise})")
+                if mse not in ["--", "-"]: parts.append(f"MSE ({mse})")
+                if ese not in ["--", "-"]: parts.append(f"ESE ({ese})")
+                if ciap not in ["--", "-", "0"]: parts.append(f"CIAP ({ciap})")
+                if esep not in ["--", "-", "0"]: parts.append(f"ESEP ({esep})")
+                scheme_summary = f"- **Examination Scheme:** {', '.join(parts)} | **Total:** {tot} marks\n"
+
+        full_text = "\n".join(p.get("text", "") for p in sec.get("all_pages", []))
+        idx = full_text.find("End Semester Examination:")
+        ese_text = ""
+        if idx != -1:
+            block = full_text[idx:idx + 700]
+            lines = [l.strip() for l in block.split("\n") if l.strip()]
+            res_lines = []
+            for l in lines[1:]:
+                if re.match(r"^[1-6]\.0\s+[A-Z]", l) or "Textbooks:" in l or "Reference" in l or "Online References" in l or "CIAP" in l:
+                    break
+                clean_l = re.sub(r"^[\$\uf0b7\•\-\*]\s*", "", l).strip()
+                if clean_l:
+                    res_lines.append(clean_l)
+            if res_lines:
+                ese_text = "\n".join(f"- {l}" if not re.match(r"^\d+\.", l) else l for l in res_lines)
+
+        if ese_text or scheme_summary:
+            body = f"{scheme_summary}{ese_text}".strip()
+            return (
+                f"### End Semester Examination (ESE) Pattern - {target_code}: {course_name}\n\n"
+                f"{body}"
+            )
+
+    # Generic ESE pattern (when no specific course is mentioned in query)
+    return (
+        "### End Semester Examination (ESE) Pattern & Question Paper Structure\n\n"
+        "According to the syllabus guidelines, the End Semester Examination (ESE) pattern for theoretical courses is as follows:\n\n"
+        "- **Duration:** 03 hours\n"
+        "- **Total Marks:** 80 marks (scaled to 60 marks)\n"
+        "- **Internal Assessment:** In-Semester Evaluation (ISE 20 marks) + Mid-Semester Examination (MSE 20 marks) | Total: 100 marks\n\n"
+        "**Question Paper Pattern:**\n"
+        "1. The question paper comprises **03 questions** covering the entire syllabus.\n"
+        "2. **Question 1 (20 marks):** Solve any **04 out of 06** questions (05 marks each).\n"
+        "3. **Question 2 (40 marks):** Solve any **04 out of 06** questions (10 marks each).\n"
+        "4. **Question 3 (20 marks):** Solve any **04 out of 06** questions (05 marks each).\n"
+        "5. All Course Outcomes (COs) are mapped as per their weightage in the syllabus.\n\n"
+        "*(Note: For 2-credit theory courses, ESE duration is 02 hours of 60 marks scaled to 45).*"
+    )
+
+
 def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None:
     if not retrieved_chunks:
         return None
@@ -1234,6 +1333,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_all_modules = extract_course_all_modules_only(check_query, retrieved_chunks)
     if fast_all_modules:
         return early_return(fast_all_modules)
+
+    fast_ese = extract_end_semester_examination_pattern(check_query, retrieved_chunks)
+    if fast_ese:
+        return early_return(fast_ese)
 
     fast_scheme = extract_course_scheme_or_credits(check_query, retrieved_chunks)
     if fast_scheme:
