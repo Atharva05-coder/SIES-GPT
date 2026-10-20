@@ -1,8 +1,8 @@
 import re
 
-MODULE_HEADING = re.compile(r"^\s*([1-6])\.0\s+(?:\1\s+)?(.+?)\s+(\d{1,2})\s*$")
-MODULE_START = re.compile(r"^\s*([1-6])\.0\s+(?!\d+\.\d+)(.*)$")
-UNIT_HEADING = re.compile(r"^\s*(?:[1-6]\.0\s+)?([1-6])\.(\d+)\b\s*(.*)$")
+MODULE_HEADING = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(?:\1\s+)?(.+?)\s+(\d{1,2})\s*$")
+MODULE_START = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(.*)$")
+UNIT_HEADING = re.compile(r"^\s*(?:[1-6](?:\.0|\.)?\s+)?([1-6])\.(\d+)\b\s*(.*)$")
 REFERENCE_HEADING = re.compile(
     r"^(Textbooks:|Reference books:|Online References:|Course Assessment:|End Semester Examination:|Course Objective[s]?:|Course Outcome[s]?:|Lab Objective[s]?:|Lab Outcome[s]?:)",
     re.IGNORECASE,
