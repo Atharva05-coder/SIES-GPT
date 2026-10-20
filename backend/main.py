@@ -136,15 +136,15 @@ app = FastAPI(title="SIES GST Assistant API", lifespan=lifespan)
 origins = [
     o.strip()
     for o in os.getenv(
-        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,*"
     ).split(",")
     if o.strip()
 ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Admin-Token"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
