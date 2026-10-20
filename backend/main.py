@@ -658,13 +658,18 @@ async def stream_pdf_answer(
                 f"{context_block}\n\n"
                 "INSTRUCTIONS:\n"
                 "1. Answer the user's question directly, comprehensively, and factually using ONLY the provided official document context above.\n"
-                "2. When multiple topics or documents are asked (e.g. NBA accreditation and IPR team), address each topic in distinct, clear markdown sections:\n"
-                "   - For NBA Accreditation: specify the accredited programs, validity academic years, evaluation basis, and program accreditation scope.\n"
-                "   - For IPR Team / KAPILA Committee: list the committee members, their designations, and their roles.\n"
-                "3. Do NOT invent dates, committee members, or document titles. Do NOT cite documents that are not in the context.\n"
-                "4. Do NOT call search_sies_pdfs. Do NOT output tool call tags like <tool_call> or JSON in your answer.\n"
-                "5. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
-                "6. Output your complete formatted response immediately."
+                "2. When multiple topics or documents are asked (e.g. NBA accreditation and IPR team), address each topic under distinct Markdown headings (### NBA Accreditation, ### IPR Team / KAPILA Committee).\n"
+                "3. FORMATTING (CRITICAL):\n"
+                "   - DO NOT format committee members or program details as a table. Use clean bullet points with bold names and designations.\n"
+                "   - Every metadata field MUST be on its own separate line as a distinct bullet point:\n"
+                "     - **Validity Period:** Academic Years 2024-2025 to 2026-2027 (up to 30 June 2027)\n"
+                "     - **Basis of Evaluation:** Tier-II June 2015 Document\n"
+                "     - **Accreditation Scope:** Program accreditation (not institutional)\n"
+                "   - Never run multiple fields, labels, or headers together on the same line.\n"
+                "4. Do NOT invent dates, committee members, or document titles. Do NOT cite documents that are not in the context.\n"
+                "5. Do NOT call search_sies_pdfs. Do NOT output tool call tags like <tool_call> or JSON in your answer.\n"
+                "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
+                "7. Output your complete formatted response immediately."
             )
             augmented_messages.append({"role": "user", "content": prompt})
         else:
@@ -720,7 +725,20 @@ async def stream_pdf_answer(
                     yield sse("tool_output")
 
         if pdf_sources:
-            yield sse("sources", sources=pdf_sources[:MAX_SOURCES])
+            full_ans_lower = "".join(answer).lower()
+            q_lower = user_query.lower()
+            filtered_sources = []
+            for s in pdf_sources:
+                t_lower = s["title"].lower()
+                title_words = [
+                    w for w in re.findall(r"\w+", t_lower)
+                    if len(w) > 3 and w not in ["letter", "document", "report", "with", "from"]
+                ]
+                if any(w in q_lower or w in full_ans_lower for w in title_words):
+                    filtered_sources.append(s)
+
+            final_sources = filtered_sources if filtered_sources else pdf_sources
+            yield sse("sources", sources=final_sources[:MAX_SOURCES])
         total_time = round(time.perf_counter() - start_time, 2)
         ttft = round(first_token_time - start_time, 2) if first_token_time else total_time
         gen_time = max(0.01, (time.perf_counter() - (first_token_time or start_time)))
