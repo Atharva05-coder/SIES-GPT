@@ -993,6 +993,8 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
         return None
     if parse_requested_modules(query) or re.search(r"\bunit\s*\d+(\.\d+)?\b", query, re.IGNORECASE):
         return None
+    if re.search(r"\b(evaluat(?:ion|e)|assessment|term\s*work|ciap|esep|bifurcat(?:ion)?)\b", query, re.I):
+        return None
 
     target_code = None
     for item in retrieved_chunks:
@@ -1170,6 +1172,188 @@ def extract_end_semester_examination_pattern(query: str, retrieved_chunks) -> st
     )
 
 
+
+def extract_course_assessment_and_evaluation(query: str, retrieved_chunks) -> str | None:
+    is_assessment_query = bool(re.search(
+        r"\b(evaluat(?:ion|e)|assessment|term\s*work|ciap|esep|bifurcat(?:ion)?|marks?\s*(?:bifurcation|distribution|breakdown)|internal\s*assessment|ise\s*marks?|mse\s*marks?)\b",
+        query,
+        re.IGNORECASE,
+    ))
+    if not is_assessment_query:
+        return None
+
+    # Don't intercept if explicitly asking only for ESE question paper pattern without mentioning evaluation/term work/assessment/bifurcation
+    if re.search(r"\b(ese|end\s*sem(?:ester)?|question\s*paper)\s*(?:paper\s*)?pattern\b", query, re.I) and not re.search(r"\b(term\s*work|ciap|esep|internal\s*assessment|ise|evaluation|assessment\s*scheme|course\s*assessment|bifurcation)\b", query, re.I):
+        return None
+
+    # Don't intercept if query specifically asks for modules, chapters, textbooks, or experiments
+    if re.search(r"\b(modules?|chapters?|units?|textbooks?|experiments?|practicals?)\b", query, re.I):
+        return None
+
+    sections = get_sections_dict()
+
+    def clean_name(raw: str) -> str:
+        name = extract_course_name_from_header(raw)
+        name = re.sub(r"(?i)\bCourse\s+Code\b|\bCourse\s+Name\b", "", name)
+        name = re.sub(r"[\d\s\-\+\*\/()]+$", "", name)
+        name = re.sub(r"[\d\s\-\+\*\/()]{3,}", " ", name)
+        name = re.sub(r"\s+", " ", name).strip(" -:\n")
+        return name
+
+    def clean_bullets(txt: str) -> str:
+        txt = re.sub(r"[\uf0b7\u2022\ufffd\x95\x96\x97\x98]", "-", txt)
+        txt = re.sub(r"(?m)^\s*o\s+", "  - ", txt)
+        txt = re.sub(r"\s{2,}(\d+\s*marks)", r": **\1**", txt)
+        txt = re.sub(r"(?m)^\s*-\s*", "- ", txt)
+        txt = re.sub(r"(?m)^\s*\d+\s*\n\s*SIES\s+Graduate\s+School\s+of\s+Technology\s*\n\s*Department\s+of\s+[^\n]+\s*\n\s*Bachelor\s+of\s+Engineering\s*$", "", txt)
+        return txt.strip()
+
+    def find_target_course(q: str):
+        if retrieved_chunks:
+            for item in retrieved_chunks:
+                meta = item.get("metadata", {})
+                if meta.get("course_code") and meta["course_code"] in sections:
+                    return meta["course_code"]
+        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", q.upper())
+        if code_match and code_match.group() in sections:
+            return code_match.group()
+        q_low = q.lower()
+        if "interpersonal" in q_low or "career skill" in q_low:
+            for c in ["CEL503", "CEL403"]:
+                if c in sections: return c
+        if "devops" in q_low:
+            for c in ["CEL501", "CEC501"]:
+                if c in sections: return c
+        if "data warehouse" in q_low or "dwm" in q_low:
+            for c in ["CEPEC5014", "CEPEL5014"]:
+                if c in sections: return c
+        if "computer network" in q_low or "networking" in q_low:
+            if "lab" in q_low and "CEL502" in sections:
+                return "CEL502"
+            if "CEC503" in sections:
+                return "CEC503"
+        if "mini project" in q_low:
+            for c in ["CEM501", "CEM601", "CEM401"]:
+                if c in sections: return c
+        best = None
+        best_len = 0
+        for code, sec in sections.items():
+            cname = clean_name(sec["header"]).lower()
+            if len(cname) > 4 and cname in q_low:
+                if len(cname) > best_len:
+                    best = code
+                    best_len = len(cname)
+        return best
+
+    target_code = find_target_course(query)
+
+    if not target_code or target_code not in sections:
+        return (
+            "### SIES GST Course Evaluation Scheme & Marks Bifurcation\n\n"
+            "Under the autonomous curriculum regulations, courses are evaluated based on the following standard examination schemes:\n\n"
+            "#### 1. Theory Courses (3-Credit / 4-Credit Courses - Total: 100 Marks)\n"
+            "- **Continuous Internal Assessment (40 Marks):**\n"
+            "  - **In-Semester Evaluation (ISE - 20 Marks):** 05 marks for Attendance + 15 marks for activities (Assignments, Quizzes, Class Tests, Presentations, or Case Studies).\n"
+            "  - **Mid-Semester Examination (MSE - 20 Marks):** Written test conducted on 40% – 50% of the syllabus.\n"
+            "- **End Semester Examination (ESE - 60 Marks):**\n"
+            "  - 03 hours written examination of 80 marks scaled down to 60 marks.\n"
+            "  - Comprises 03 questions covering all Course Outcomes (COs).\n\n"
+            "#### 2. Laboratory / Practical Courses (1-Credit / 2-Credit Courses - Total: 50 Marks)\n"
+            "- **Continuous Internal Assessment Practical (CIAP / Term Work - 25 or 50 Marks):**\n"
+            "  - Laboratory experiments/performance (minimum 12 experiments covering all LOs).\n"
+            "  - Continuous laboratory assessment + Attendance.\n"
+            "- **End Semester Examination Practical (ESEP - 25 Marks):**\n"
+            "  - 02 hours Practical and Oral exam conducted by internal and external examiners.\n\n"
+            "#### 3. Mini Project / Major Project (Total: 50 Marks)\n"
+            "- **Term Work (CIAP - 25 Marks):** Evaluated based on Guide Logbook (10 marks), Review Committee evaluations (10 marks), and Project Report (05 marks).\n"
+            "- **Practical / Oral Examination (ESEP - 25 Marks):** Project demonstration and defense before an expert panel."
+        )
+
+    sec = sections[target_code]
+    course_name = clean_name(sec["header"])
+    p1_text = sec["all_pages"][0]["text"]
+    text_clean = re.sub(rf"\b{re.escape(target_code)}\b", "", p1_text)
+
+    teaching_scheme = None
+    credits_assigned = None
+    m_teach = re.search(r"(?is)(?:Teaching\s*Scheme|Theory\s+Practical\s+Tutorial|Credits\s*Assigned).*?(?=\n\s*(?:Examination\s*Scheme|Pre-?requisite|Program\s*Outcomes)|\Z)", text_clean)
+    if m_teach:
+        block = m_teach.group(0)
+        header_match = re.search(r"(?i)(?:Tot\s*al|Total)", block)
+        sub_block = block[header_match.end():] if header_match else block
+        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        if len(nums) >= 6:
+            th_h, pr_h, tu_h = nums[0], nums[1], nums[2]
+            th_c, pr_c, tu_c = nums[3], nums[4], nums[5]
+            tot_c = nums[6] if len(nums) >= 7 else nums[-1]
+            parts_h = []
+            if th_h not in ["--", "-", "0"]: parts_h.append(f"{th_h} (Theory)")
+            if pr_h not in ["--", "-", "0"]: parts_h.append(f"{pr_h} (Practical)")
+            if tu_h not in ["--", "-", "0"]: parts_h.append(f"{tu_h} (Tutorial)")
+            teaching_scheme = " + ".join(parts_h) if parts_h else "--"
+            credits_assigned = f"{tot_c}"
+        elif len(nums) >= 3:
+            teaching_scheme = f"{nums[0]} hrs (Theory)" if nums[0] not in ["--", "-"] else "--"
+            credits_assigned = f"{nums[-1]}"
+
+    exam_scheme = None
+    total_marks = None
+    m_exam = re.search(r"(?is)(?:Examination\s*Scheme|Theory\s*Marks|Course\s*Assessment\s*ESE).*?(?=\n\s*(?:Pre-?requisite|Program\s*Outcomes)|\Z)", text_clean)
+    if m_exam:
+        e_block = m_exam.group(0)
+        nums = re.findall(r"(\d+|\-{1,2})", e_block)
+        if len(nums) >= 6:
+            ise, mse, ese, ciap, esep, tot = nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]
+            parts = []
+            if ise not in ["--", "-", "0"]: parts.append(f"ISE ({ise})")
+            if mse not in ["--", "-", "0"]: parts.append(f"MSE ({mse})")
+            if ese not in ["--", "-", "0"]: parts.append(f"ESE ({ese})")
+            if ciap not in ["--", "-", "0"]: parts.append(f"CIAP / Term Work ({ciap})")
+            if esep not in ["--", "-", "0"]: parts.append(f"ESEP ({esep})")
+            exam_scheme = ", ".join(parts) if parts else "See details below"
+            total_marks = tot
+        elif len(nums) >= 1:
+            total_marks = nums[-1]
+
+    all_text = []
+    for i, p in enumerate(sec["all_pages"]):
+        t = p.get("text", "")
+        if i == 0:
+            t = re.sub(r"(?is)Course\s*Assessment\s*ESE.*?Pre-?requisite", "Pre-requisite", t)
+        all_text.append(t)
+    combined = "\n".join(all_text)
+
+    m_assess = re.search(r"(?is)(?:\n\s*(?:Course\s*Assessment|Term\s*Work\s*(?:Marks|\(CIAP\)|Evaluation)?|2\s*Guidelines\s+for\s+Assessment|Evaluation\s+of\s+Term\s*Work)\s*:?).*", combined)
+
+    result_lines = []
+    course_name_clean = re.sub(r"(?i)\bCourse\s+Code\b|\bCourse\s+Name\b", "", course_name).strip(" -:\n")
+    result_lines.append(f"### {target_code}: {course_name_clean} - Evaluation Scheme & Course Assessment\n")
+    meta_info = []
+    if credits_assigned: meta_info.append(f"**Credits Assigned:** {credits_assigned}")
+    if teaching_scheme: meta_info.append(f"**Teaching Scheme:** {teaching_scheme}")
+    if exam_scheme and total_marks: meta_info.append(f"**Examination Scheme:** {exam_scheme} | **Total Marks:** {total_marks}")
+    elif exam_scheme: meta_info.append(f"**Examination Scheme:** {exam_scheme}")
+    if meta_info:
+        result_lines.append("\n".join(meta_info) + "\n")
+
+    if m_assess:
+        raw_assess = m_assess.group(0).strip()
+        cleaned_assess = clean_bullets(raw_assess)
+        cleaned_assess = re.sub(r"(?i)^Course Assessment:\s*", "#### Course Assessment Breakdown:\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)^Term Work:\s*", "#### Term Work (CIAP) Guidelines:\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)\nISE:\s*", "\n**1. In-Semester Evaluation (ISE - 20 Marks):**\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)\nMSE:\s*", "\n**2. Mid-Semester Examination (MSE - 20 Marks):**\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)\nEnd Semester Examination:\s*", "\n**3. End Semester Examination (ESE - 60 Marks):**\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)\nPractical Exam:\s*", "\n**Practical Examination (ESEP):**\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?i)\nTerm work Marks\s*(\(\s*CIAP\s*\))?:\s*", "\n**Term Work Marks Bifurcation (CIAP):**\n", cleaned_assess)
+        cleaned_assess = re.sub(r"(?m)^-\s*(Report\s+Presentation|Group\s+Discussion|Mock\s+Interview|Project\s+Report|Assignments\s+based|Attendance)", r"  - \1", cleaned_assess)
+
+        result_lines.append(cleaned_assess)
+    else:
+        result_lines.append(f"Detailed assessment follows the autonomous curriculum scheme for {target_code} with total {total_marks or '100'} marks.")
+
+    return "\n\n".join(result_lines)
+
 def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None:
     if not retrieved_chunks:
         return None
@@ -1177,7 +1361,7 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
     if re.search(r"\b(credit\s+distribution|credits?\s+distribution|semester-?wise\s+credit|total\s+credits?\s+for\s+(?:the\s+)?(?:degree|b\.?tech|program|engineering))\b", query, re.I):
         return None
 
-    if re.search(r"\b(modules?|chapters?|topics?|experiments?|practicals?|tasks?|syllabus|curriculum|prerequisites?)\b", query, re.I):
+    if re.search(r"\b(modules?|chapters?|topics?|experiments?|practicals?|tasks?|syllabus|curriculum|prerequisites?|evaluat(?:ion|e)|assessment|term\s*work|ciap|esep|bifurcat(?:ion)?)\b", query, re.I):
         return None
 
     wants_credits = bool(re.search(r"\b(credits?|how\s+many\s+credits?|credit\s+assigned|assigned\s+credits?)\b", query, re.I))
@@ -1337,6 +1521,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_ese = extract_end_semester_examination_pattern(check_query, retrieved_chunks)
     if fast_ese:
         return early_return(fast_ese)
+
+    fast_assess = extract_course_assessment_and_evaluation(check_query, retrieved_chunks)
+    if fast_assess:
+        return early_return(fast_assess)
 
     fast_scheme = extract_course_scheme_or_credits(check_query, retrieved_chunks)
     if fast_scheme:

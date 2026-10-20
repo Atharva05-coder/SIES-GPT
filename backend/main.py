@@ -873,7 +873,8 @@ def get_syllabus_courses_regex() -> re.Pattern | None:
 
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
-    r"exam|examination|scheme|internal assessment|ese|ise|ciap|esep|mse|practicals?|experiments?|"
+    r"exam|examination|scheme|internal assessment|assessment|evaluation|term\s*work|bifurcation|distribution|"
+    r"ese|ise|ciap|esep|mse|practicals?|experiments?|"
     r"labs?|textbooks?|references?|minors?|mdm|electives?|pep|oec|hours?|teaching scheme|"
     r"unit\s*\d+|topics?|outcomes?|course\s*outcome|program\s*outcome|los|cos)\b"
     # Course codes must have a recognised 3-letter+ prefix followed by digits
@@ -888,6 +889,7 @@ FAST_SYLLABUS_RE = re.compile(
     r"machine\s*learning|soft\s*computing|system\s*programming|compiler\s*construction|"
     r"spcc|digital\s*forensics?|machine\s*vision|internet\s*of\s*things|iot|"
     r"natural\s*language\s*processing|nlp|cloud\s*computing|devops|"
+    r"interpersonal(\s*(?:and|&)?\s*career\s*skills?)?|career\s*skills?|"
     r"robotics(\s*and\s*applications)?|sensor\s*technology|ethical\s*hacking|"
     r"data\s*warehouse(\s*and\s*mining)?|applied\s*mathematics|engineering\s*economics|"
     r"critical\s*thinking|applied\s*physics|applied\s*chemistry|engineering\s*graphics|"
