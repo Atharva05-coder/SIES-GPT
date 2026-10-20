@@ -537,6 +537,74 @@ async def stream_answer(
             ACTIVE_REQUESTS.pop(req_id, None)
 
 
+def prefetch_pdf_context(query: str, top_k: int = 5) -> tuple[str, list[dict[str, str]]]:
+    """
+    Prefetch relevant PDF document chunks before running the LLM.
+    Guarantees that official documents (e.g. NBA accreditation, IPR team,
+    Internship, Emergency Exits, Epsilon brochure) are searched and grounded.
+    """
+    import urllib.parse
+
+    all_chunks = []
+    seen_ids = set()
+
+    # 1. Primary search with full query
+    try:
+        primary = pdf_rag.hybrid_search(query, top_k=top_k)
+        for c in primary:
+            if c["id"] not in seen_ids:
+                seen_ids.add(c["id"])
+                all_chunks.append(c)
+    except Exception as e:
+        log.warning("Primary hybrid_search failed: %s", e)
+
+    # 2. Sub-clause search for multi-topic queries (e.g. "NBA accreditation and IPR team")
+    clauses = re.split(r"\b(?:and|as well as|along with|\&)\b", query, flags=re.I)
+    if len(clauses) > 1:
+        for clause in clauses:
+            clean_clause = clause.strip()
+            clean_clause = re.sub(
+                r"^(?:tell me about|what is|what are|explain|details? of|give|show)\s+",
+                "",
+                clean_clause,
+                flags=re.I,
+            ).strip()
+            if len(clean_clause) >= 3:
+                try:
+                    sub_results = pdf_rag.hybrid_search(clean_clause, top_k=3)
+                    for c in sub_results:
+                        if c["id"] not in seen_ids:
+                            seen_ids.add(c["id"])
+                            all_chunks.append(c)
+                except Exception as e:
+                    log.warning("Sub-clause hybrid_search failed for '%s': %s", clean_clause, e)
+
+    if not all_chunks:
+        return "", []
+
+    sections = []
+    sources = []
+    for index, item in enumerate(all_chunks[:8], start=1):
+        clean_title = urllib.parse.unquote(item["title"]).replace("_", " ")
+        url = item.get("source", "")
+        if url and not any(s["url"] == url for s in sources):
+            sources.append({"url": url, "title": clean_title})
+
+        sections.append(
+            f"[Source {index}: {clean_title}]\n"
+            f"Document: {clean_title}\n"
+            f"Content:\n{item['text']}"
+        )
+
+    context_block = (
+        "OFFICIAL SIES GST PDF DOCUMENT CONTEXT:\n"
+        "======================================\n"
+        + "\n\n---\n\n".join(sections)
+        + "\n======================================"
+    )
+    return context_block, sources
+
+
 async def stream_pdf_answer(
     agent: Any,
     messages: list[Msg],
@@ -567,6 +635,11 @@ async def stream_pdf_answer(
         return
 
     try:
+        user_query = messages[-1].content
+        context_block, prefetched_sources = await asyncio.to_thread(
+            prefetch_pdf_context, user_query
+        )
+
         recent_messages = messages[-3:] if len(messages) > 3 else messages
         augmented_messages: list[dict[str, str]] = []
         for m in recent_messages[:-1]:
@@ -574,14 +647,38 @@ async def stream_pdf_answer(
             if m.role == "assistant" and len(content) > 500:
                 content = content[:500] + "... [earlier response truncated]"
             augmented_messages.append({"role": m.role, "content": content})
-        augmented_messages.append({"role": "user", "content": messages[-1].content})
+
+        if context_block:
+            pdf_sources.extend(prefetched_sources)
+            yield sse("tool_call", name="search_sies_pdfs") + f": {' ' * 1024}\n\n"
+            yield sse("tool_output")
+
+            prompt = (
+                f"{user_query}\n\n"
+                f"{context_block}\n\n"
+                "INSTRUCTIONS:\n"
+                "1. Answer the user's question directly, comprehensively, and factually using ONLY the provided official document context above.\n"
+                "2. When multiple topics or documents are asked (e.g. NBA accreditation and IPR team), address each topic in distinct, clear markdown sections:\n"
+                "   - For NBA Accreditation: specify the accredited programs, validity academic years, evaluation basis, and program accreditation scope.\n"
+                "   - For IPR Team / KAPILA Committee: list the committee members, their designations, and their roles.\n"
+                "3. Do NOT invent dates, committee members, or document titles. Do NOT cite documents that are not in the context.\n"
+                "4. Do NOT call search_sies_pdfs. Do NOT output tool call tags like <tool_call> or JSON in your answer.\n"
+                "5. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
+                "6. Output your complete formatted response immediately."
+            )
+            augmented_messages.append({"role": "user", "content": prompt})
+        else:
+            augmented_messages.append({"role": "user", "content": user_query})
 
         result = Runner.run_streamed(
             agent,
             augmented_messages,  # type: ignore
-            max_turns=6,
+            max_turns=3 if context_block else 6,
         )
         runner_result = result
+        tool_call_buffer = ""
+        suppress_tool_call = False
+
         async for event in result.stream_events():
             if request is not None and await request.is_disconnected():
                 log.info("Client disconnected detected in stream_pdf_answer: %s", req_id)
@@ -590,11 +687,22 @@ async def stream_pdf_answer(
 
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
+                    delta = event.data.delta
+                    tool_call_buffer += delta
+                    if "<tool_call>" in tool_call_buffer:
+                        suppress_tool_call = True
+                    if "</tool_call>" in tool_call_buffer:
+                        tool_call_buffer = re.sub(r"<tool_call>.*?</tool_call>", "", tool_call_buffer, flags=re.DOTALL)
+                        suppress_tool_call = False
+                        continue
+                    if suppress_tool_call:
+                        continue
+
                     if first_token_time is None:
                         first_token_time = time.perf_counter()
                     token_count += 1
-                    answer.append(event.data.delta)
-                    yield sse("token", text=event.data.delta)
+                    answer.append(delta)
+                    yield sse("token", text=delta)
 
             elif event.type == "run_item_stream_event":
                 if event.name == "tool_called":
