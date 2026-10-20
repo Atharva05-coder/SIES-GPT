@@ -423,18 +423,8 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
         return None
 
     m_unit = re.search(r'\bunit\s*(\d+\.\d+)\b', query, re.I)
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
     sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if not target_code or target_code not in sections:
         return None
@@ -511,18 +501,8 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
     if not wants_modules:
         return None
 
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
     sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if not target_code or target_code not in sections:
         return None
@@ -567,18 +547,8 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
         and not re.search(r"\brefer\b", query, re.IGNORECASE)
     )
 
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
     sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     candidate_pages = []
     if target_code and target_code in sections:
@@ -796,6 +766,109 @@ def extract_course_name_from_header(header: str) -> str:
     return clean
 
 
+
+# Master dictionary mapping course acronyms to course codes for all FY/SY/TE theory and lab courses
+ACRONYM_TO_COURSE_CODE = {
+    # FE Sem 1
+    "AM1": "FEC101", "AM-1": "FEC101", "M1": "FEC101", "MATHS1": "FEC101", "MATHS-1": "FEC101",
+    "AP1": "FEC1021", "AP-1": "FEC1021", "AP": "FEC1021", "AP LAB": "FEL1011", "AP1 LAB": "FEL1011",
+    "AC1": "FEC1022", "AC-1": "FEC1022", "AC": "FEC1022", "AC LAB": "FEL1012", "AC1 LAB": "FEL1012",
+    "BEE": "FEC103", "BEEE": "FEC103", "BEE LAB": "FEL102", "BEEE LAB": "FEL102",
+    "CP": "FEC104", "CP LAB": "FEL103",
+    "AMRD": "FEC105", "AMRD LAB": "FEL104",
+    "EW1": "FEL105", "WORKSHOP 1": "FEL105", "HWM": "FEL106", "UHV1": "FEL107",
+    # FE Sem 2
+    "AM2": "FEC201", "AM-2": "FEC201", "M2": "FEC201", "MATHS2": "FEC201", "MATHS-2": "FEC201",
+    "AP2": "FEC2021", "AP2 LAB": "FEL2011",
+    "AC2": "FEC2022", "AC2 LAB": "FEL2012",
+    "EG": "FEC203", "EG LAB": "FEL202",
+    "DSD": "FEC204", "DSD LAB": "FEL203",
+    "PCT": "FEC205", "PCT LAB": "FEL204",
+    "OOPM": "FEL205", "OOPM LAB": "FEL205", "OOP LAB": "FEL205",
+    "EW2": "FEL206", "WORKSHOP 2": "FEL206", "IKS": "FEL207",
+    # SE Sem 3
+    "AM3": "CEC301", "AM-3": "CEC301", "M3": "CEC301", "MATHS3": "CEC301", "MATHS-3": "CEC301",
+    "DS": "CEC302", "DSA": "CEC302", "DS LAB": "CEL301", "DSA LAB": "CEL301",
+    "DSGT": "CEC303", "DBMS": "CEC304", "DBMS LAB": "CEL302",
+    "COA": "CEC305", "COA LAB": "CEL303",
+    "EE": "CEC306", "SPP": "CEL304", "PYTHON LAB": "CEL304", "PYTHON": "CEL304",
+    "MP1A": "CEM301", "MP 1A": "CEM301",
+    # SE Sem 4
+    "AM4": "CEC401", "AM-4": "CEC401", "M4": "CEC401", "MATHS4": "CEC401", "MATHS-4": "CEC401",
+    "OS": "CEC402", "OS LAB": "CEL401",
+    "AOA": "CEC403", "ADA": "CEC403", "AOA LAB": "CEL402", "ADA LAB": "CEL402",
+    "CTD": "CEC404", "WT": "CEL403", "WT LAB": "CEL403", "WEB TECH LAB": "CEL403",
+    "VEC": "CEL404", "UHV": "CEL404", "MP1B": "CEM401", "MP 1B": "CEM401",
+    # TE Sem 5
+    "TCS": "CEC501",
+    "SE": "CEC502", "SE LAB": "CEC502",
+    "CN": "CEC503", "CN LAB": "CEL502",
+    "DEVOPS": "CEL501", "DEVOPS LAB": "CEL501", "DOL": "CEL501",
+    "ICS": "CEL503", "ICS LAB": "CEL503",
+    "MP2": "CEM501", "MP 2": "CEM501",
+    # Electives Sem 5
+    "ADBMS": "CEPEC5011", "ADBMS LAB": "CEPEL5011",
+    "IOT": "CEPEC5012", "IOT LAB": "CEPEL5012",
+    "EH": "CEPEC5013", "EH LAB": "CEPEL5013",
+    "DWM": "CEPEC5014", "DWM LAB": "CEPEL5014",
+    # Minors Sem 5
+    "DAV": "MDMC5022", "DAV LAB": "MDML5021",
+    "ESR": "MDMC5032", "ESR LAB": "MDML5031",
+    "SCM": "MDMC5062",
+    # TE Sem 6
+    "SPCC": "CEC601", "SPCC LAB": "CEC601",
+    "CNS": "CEC602", "CNS LAB": "CEC602",
+    "AISC": "CEC603", "AI": "CEC603",
+    "CI LAB": "CEL601", "CIL": "CEL601",
+    "CC LAB": "CEL602", "CLOUD LAB": "CEL602", "CLOUD COMPUTING LAB": "CEL602",
+    "MPI": "CEP601", "MAJOR PROJECT 1": "CEP601",
+    # Electives Sem 6
+    "MV": "CEPEC6011", "MV LAB": "CEPEL6011",
+    "RA": "CEPEC6012", "RA LAB": "CEPEL6012", "ROBOTICS": "CEPEC6012", "ROBOTICS LAB": "CEPEL6012",
+    "DF": "CEPEC6013", "DF LAB": "CEPEL6013",
+    "NLP": "CEPEC6014", "NLP LAB": "CEPEL6014",
+    # Minors Sem 6
+    "DMBI": "MDMC6023", "DMBI LAB": "MDML6022",
+    "ST": "MDMC6033", "ST LAB": "MDML6032",
+    "OBHRM": "MDMC6063", "OB": "MDMC6063"
+}
+
+def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | None:
+    sections = get_sections_dict()
+    # 1. From retrieved chunks metadata
+    if retrieved_chunks:
+        for item in retrieved_chunks:
+            meta = item.get("metadata", {})
+            if meta.get("course_code") and meta["course_code"] in sections:
+                return meta["course_code"]
+
+    # 2. Check explicit course code in query
+    code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
+    if code_match and code_match.group() in sections:
+        return code_match.group()
+
+    # 3. Check acronyms in query (sorted by longest acronym key first)
+    q_upper = query.upper()
+    for acr in sorted(ACRONYM_TO_COURSE_CODE.keys(), key=len, reverse=True):
+        pattern = rf"\b{re.escape(acr)}\b"
+        if re.search(pattern, q_upper):
+            target = ACRONYM_TO_COURSE_CODE[acr]
+            if target in sections:
+                return target
+
+    # 4. Search course name in sections
+    q_low = query.lower()
+    best = None
+    best_len = 0
+    for code, sec in sections.items():
+        cname = extract_course_name_from_header(sec["header"]).lower()
+        cname_clean = re.sub(r"\(.*?\)", "", cname).strip()
+        if len(cname_clean) > 4 and cname_clean in q_low:
+            if len(cname_clean) > best_len:
+                best = code
+                best_len = len(cname_clean)
+    return best
+
 def build_course_full_markdown(target_code: str, section: dict, sections: dict) -> str:
     p1_text = section["all_pages"][0]["text"]
     course_name = extract_course_name_from_header(section["header"])
@@ -996,18 +1069,8 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
     if re.search(r"\b(evaluat(?:ion|e)|assessment|term\s*work|ciap|esep|bifurcat(?:ion)?)\b", query, re.I):
         return None
 
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
     sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if not target_code or target_code not in sections:
         return None
@@ -1102,7 +1165,7 @@ def extract_end_semester_examination_pattern(query: str, retrieved_chunks) -> st
                     best_len = len(cname_clean)
         return best
 
-    target_code = find_course_in_q(query)
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if target_code and target_code in sections:
         sec = sections[target_code]
@@ -1245,7 +1308,7 @@ def extract_course_assessment_and_evaluation(query: str, retrieved_chunks) -> st
                     best_len = len(cname)
         return best
 
-    target_code = find_target_course(query)
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if not target_code or target_code not in sections:
         return (
@@ -1371,18 +1434,8 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
     if not (wants_credits or wants_teaching or wants_exam):
         return None
 
-    target_code = None
-    for item in retrieved_chunks:
-        meta = item.get("metadata", {})
-        if meta.get("course_code"):
-            target_code = meta.get("course_code")
-            break
-
     sections = get_sections_dict()
-    if not target_code:
-        code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z]?\b", query.upper())
-        if code_match and code_match.group() in sections:
-            target_code = code_match.group()
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
 
     if not target_code or target_code not in sections:
         return None

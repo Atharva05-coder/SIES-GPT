@@ -880,7 +880,9 @@ FAST_SYLLABUS_RE = re.compile(
     # Course codes must have a recognised 3-letter+ prefix followed by digits
     r"|\b(?:FEC|FEL|CEC|CEL|CEPEC|CEPEL|MDMC|MDML|OEC|CSC|CSL|ITC|ITL|AIDS|AIML)\d{2,4}[A-Z0-9/]*\b"
     # Common academic course abbreviations and shorthands
-    r"|\b(?:m-?[1-4]|am-?[1-4]|maths?-?[1-4]|maths?-?[iIvVxX]+|dsa|ada|cns|coa|bda|hpc|dwm|eh|mv|df|adbms|dl|arvr|qc|rl|bc)\b"
+    r"|\b(?:m-?[1-4]|am-?[1-4]|maths?-?[1-4]|maths?-?[iIvVxX]+|dsa|ada|cns|coa|bda|hpc|dwm|eh|mv|df|adbms|dl|arvr|qc|rl|bc|se|cn|ics|tcs|spcc|aisc|dav|esr|scm|dmbi|st|obhrm|ra|dsgt|ctd|ee|spp|wt|oopm|beee?|cp|amrd|eg|dsd|pct|ew[12]|uhv|vec|mp[12][ab]?|mpi)\b"
+    # Lab specific shorthands
+    r"|\b(?:cn|se|dbms|ds|dsa|os|aoa|ada|coa|spcc|cns|ai|aisc|ci|cc|dwm|iot|eh|adbms|nlp|df|mv|ra|dav|esr|st|dmbi|ics|devops|wt|spp|python|oopm|dsd|eg|bee|beee|cp|amrd|ap|ac|pct)\s*labs?\b"
     # Common academic subjects & syllabus courses
     r"|\b(?:computer\s*networks?|theoretical\s*computer\s*science|tcs|data\s*structures?|"
     r"discrete\s*structures?|graph\s*theory|database\s*management|dbms|"
