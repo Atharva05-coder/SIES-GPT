@@ -660,7 +660,7 @@ async def stream_pdf_answer(
                 "1. Answer the user's question directly, comprehensively, and factually using ONLY the provided official document context above.\n"
                 "2. When multiple topics or documents are asked (e.g. NBA accreditation and IPR team), address each topic under distinct Markdown headings (### NBA Accreditation, ### IPR Team / KAPILA Committee).\n"
                 "3. FORMATTING (CRITICAL):\n"
-                "   - DO NOT format committee members or program details as a table. Use clean bullet points with bold names and designations.\n"
+                "   - When presenting structured tabular information from official documents (such as committee members or lists with columns like Designation, Name, Organization, Contact, Email), format it as a clean Markdown table as given in the source document.\n"
                 "   - Every metadata field MUST be on its own separate line as a distinct bullet point:\n"
                 "     - **Validity Period:** Academic Years 2024-2025 to 2026-2027 (up to 30 June 2027)\n"
                 "     - **Basis of Evaluation:** Tier-II June 2015 Document\n"
