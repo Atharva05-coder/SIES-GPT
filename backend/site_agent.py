@@ -684,6 +684,9 @@ class SiteIndex:
             w in query_set for w in ["computer", "it", "information", "extc", "electronics", "ecs", "mech", "mechanical", "aids", "aiml", "ai"]
         )
 
+        ignore_words = {"faculty", "mam", "sir", "prof", "professor", "dr", "tell", "about", "who", "details", "info", "experience", "qualification", "publications"}
+        person_tokens = [t for t in query_tokens if len(t) >= 3 and t not in ignore_words]
+
         ranked = []
         for index, (score, metadata) in enumerate(zip(scores, self.meta)):
             chunk = self.chunks[index]
@@ -698,11 +701,17 @@ class SiteIndex:
                     dept_boost += 0.5
                     if is_dept_faculty_query:
                         dept_boost += 1.5
-            if "faculty" in url and any(w in query_set for w in ["hod", "head", "faculty", "professor", "dr"]):
-                if is_dept_faculty_query:
-                    dept_boost -= 1.0
-                else:
-                    dept_boost += 0.35
+            if "/faculty/" in url:
+                if any(pt in slug for pt in person_tokens):
+                    dept_boost += 3.0
+            elif url.rstrip("/") == "https://siesgst.edu.in/faculty":
+                if person_tokens:
+                    dept_boost -= 2.0
+                elif any(w in query_set for w in ["hod", "head", "faculty", "professor", "dr"]):
+                    if is_dept_faculty_query:
+                        dept_boost -= 1.0
+                    else:
+                        dept_boost += 0.35
 
             if is_program_query:
                 if any(u in url for u in ["about-sies-gst", "first-year-engineering", "admissions-ug-engineering", "admissions-pg-engineering", "workingprof"]):
@@ -832,7 +841,36 @@ Today is {today}.
 
 Rules:
 1. Provide comprehensive, detailed, and well-structured answers using official website content. Stay directly focused on what the user asked without omitting key factual information.
-   - For an individual faculty member/teacher/person inquiry (e.g. 'Who is Dr. X?', 'Tell me about X'): Provide their full profile including Designation & Department, Qualifications, full Professional Work Experience / Employment History (roles, institutions, dates), Research Domains, Publications, and Awards. Only report fields available in the data; do NOT write 'Not specified' or 'N/A' for missing attributes.
+   - For an individual faculty member query (e.g. 'Tell me about [Name]', 'Who is [Name]?'):
+     * Start with an introductory sentence: '[Name] is an [Designation] in the Department of [Department] at SIES Graduate School of Technology (SIES GST). Here are key details about [him/her]:'
+     * Structure with clean Markdown headings, bullet points, and tables:
+       ### Academic Background
+       - **Qualifications:** [degrees/qualifications]
+       - **Employee ID:** [Employee ID from Department Roster Data] (if available)
+       - **Date of Joining:** [Date of Joining] (if available)
+       - **Designation:** [Designation]
+       - **Department:** [Department]
+       - **Contact Email:** [email] (if available)
+       - **Status of Appointment:** [Status] (if available)
+       ### Teaching Responsibilities
+       - **Courses Taught:**
+         * [Course 1]
+         * [Course 2]
+       ### Professional Work Experience
+       Format as a clean Markdown table with columns:
+       | Designation | Organization | Location | From Date | To Date |
+       ### Research and Publications
+       Format Conference Contributions and Journal Publications as clean Markdown table(s) with columns:
+       | Date / Academic Year | Title | Type / Level |
+       ### Professional Development
+       Format workshops, training programs, FDPs & STTPs as a clean Markdown table with columns:
+       | Date | Program Title | Type / Level | Role | Venue |
+       ### Achievements and Certifications
+       Format as a clean Markdown table with columns:
+       | Academic Year | Certification / Award | Details |
+     * CRITICAL: ALWAYS include Employee ID and Date of Joining in Academic Background if available in the data.
+     * CRITICAL: NEVER output boilerplate placeholder phrases like 'Not explicitly specified in the provided data', 'Not specified', or 'N/A'. If data for a section is missing, completely omit that section heading.
+     * Conclude with: 'For more details, visit her faculty profile page.' (or his profile page).
    - For a general department faculty roster query (e.g. 'Who are the faculty in Computer Engineering?', 'List IT faculty'): Present a clean, query-specific markdown table or structured list showing Name, Designation, and Qualification. Do NOT repeat boilerplate placeholders (e.g. never repeat 'Date of Joining: Not specified', 'Research Areas: Not specified'). If detailed info is explicitly requested, include available details.
    - For specific attribute queries (e.g. 'Who is the HOD of Computer Engineering?', 'What are the awards of Dr. X?'): Answer directly and concisely with only the requested information.
    - For committees or teams, clearly present the Coordinator/Head followed by all members with their designations.

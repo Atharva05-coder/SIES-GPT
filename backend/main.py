@@ -96,6 +96,8 @@ async def rebuild(refresh: bool) -> None:
         state.error = None
         try:
             state.index, state.agent = await asyncio.to_thread(_build, refresh)
+            global _faculty_names_re
+            _faculty_names_re = None
             log.info(
                 "index ready: %d pages, %d chunks",
                 len(state.index.pages),
@@ -214,6 +216,7 @@ def extract_page_repr(
     fallback_text: str,
     hit_chunks: list[str],
     max_chars: int = 4000,
+    query: str = "",
 ) -> str:
     """
     Extract high-value structured text from a page object or fallback string.
@@ -227,44 +230,63 @@ def extract_page_repr(
     if not lines:
         return fallback_text[:max_chars].strip()
 
-    # Specialized structuring for faculty profiles to ensure bio, degrees, and full work experience are preserved
+    # Specialized structuring for faculty profiles to ensure bio, degrees, courses, publications, FDPs/workshops, and full work experience are preserved
     if "/faculty/" in url.lower():
         nav_words = {
             "courses", "publications", "papers", "participations",
             "awards", "assignments", "achievements", "material url: view material"
         }
-        header_lines: list[str] = []
+        bio_lines: list[str] = []
+        course_lines: list[str] = []
         exp_lines: list[str] = []
+        pub_lines: list[str] = []
+        dev_lines: list[str] = []
+        award_lines: list[str] = []
+
         for l in lines:
-            l_strip = l.strip()
-            if not l_strip or l_strip.lower() in nav_words:
+            s = l.strip()
+            if not s or s.lower() in nav_words:
                 continue
-            if l_strip.startswith("From Date:"):
-                exp_lines.append(l_strip)
-            elif not exp_lines:
-                header_lines.append(l_strip)
+            if s.startswith("From Date:"):
+                exp_lines.append(s)
+            elif s.startswith("Course Title:"):
+                course_lines.append(s.replace("; Material URL: View Material", ""))
+            elif s.startswith("Date:"):
+                if any(w in s for w in ["Type: Journal", "Type: Conference", "Level: National", "Level: International"]):
+                    pub_lines.append(s)
+                else:
+                    dev_lines.append(s)
+            elif "Type: " in s and any(k in s for k in ["Badge", "Certificate", "Award", "Academic Year:"]):
+                award_lines.append(s)
+            else:
+                if not exp_lines and not pub_lines and not dev_lines and not course_lines:
+                    bio_lines.append(s)
 
         parts: list[str] = []
-        if header_lines:
-            parts.append("### Basic Profile & Qualifications\n" + "\n".join(header_lines))
+        if bio_lines:
+            parts.append("### Basic Profile & Academic Background\n" + "\n".join(bio_lines))
+        if course_lines:
+            parts.append("### Teaching Responsibilities (Courses Taught)\n" + "\n".join(course_lines))
+        if pub_lines:
+            parts.append("### Research and Publications\n" + "\n".join(pub_lines))
+        if dev_lines:
+            parts.append("### Professional Development (Workshops, Training Programs, FDPs & STTPs)\n" + "\n".join(dev_lines))
         if exp_lines:
             parts.append("### Professional Work Experience\n" + "\n".join(exp_lines))
+        if award_lines:
+            parts.append("### Achievements and Certifications\n" + "\n".join(award_lines))
 
-        base = "\n\n".join(parts)
-        remaining = max_chars - len(base)
-        if remaining > 300 and hit_chunks:
-            extra = []
-            for ch in hit_chunks:
-                sample = ch.split("\n")[0].strip()
-                if sample and sample not in base:
-                    extra.append(ch)
-            if extra:
-                base += "\n\n### Notable Activities, Publications & Research\n" + "\n\n".join(extra)[:remaining].strip()
-        return base.strip()
+        return "\n\n".join(parts)[:max_chars].strip()
 
     # Department pages: if faculty lines exist, extract clean faculty roster without losing staff entries
     fac_lines = [l.strip() for l in lines if l.strip().startswith("Name of the Staff:")]
     if fac_lines:
+        ignore_words = {"faculty", "mam", "sir", "prof", "professor", "dr", "tell", "about", "who", "details", "info", "experience", "qualification", "publications"}
+        person_tokens = [t.lower() for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) >= 3 and t not in ignore_words]
+        matching_lines = [l for l in fac_lines if any(tok in l.lower() for tok in person_tokens)]
+        if matching_lines:
+            other_lines = [l for l in fac_lines if l not in matching_lines]
+            fac_lines = matching_lines + other_lines
         intro = "\n".join(lines[:10])[:400].strip()
         fac_block = "\n".join(fac_lines)
         return f"{intro}\n\n### Faculty Roster\n{fac_block}"[:max_chars].strip()
@@ -306,7 +328,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     p_obj = index.pages.get(sa.normalize_url(top_url))
     fallback_text = index.read_page(top_url) if not p_obj else ""
     top_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == top_url and h.get("text")]
-    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=5000)
+    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=6000, query=query)
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
@@ -315,7 +337,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
             p2_obj = index.pages.get(sa.normalize_url(second_url))
             fallback2 = index.read_page(second_url) if not p2_obj else ""
             second_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == second_url and h.get("text")]
-            second_content = extract_page_repr(second_url, p2_obj, fallback2, second_hit_chunks, max_chars=1500)
+            second_content = extract_page_repr(second_url, p2_obj, fallback2, second_hit_chunks, max_chars=1800, query=query)
             if second_content:
                 full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
                 read_urls.append(second_url)
@@ -325,7 +347,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
         if third_url.rstrip("/") not in [top_url.rstrip("/"), second_url.rstrip("/")]:
             p3_obj = index.pages.get(sa.normalize_url(third_url))
             fallback3 = index.read_page(third_url) if not p3_obj else ""
-            third_content = extract_page_repr(third_url, p3_obj, fallback3, [], max_chars=1000)
+            third_content = extract_page_repr(third_url, p3_obj, fallback3, [], max_chars=1000, query=query)
             if third_content:
                 full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
                 read_urls.append(third_url)
@@ -439,7 +461,35 @@ async def stream_answer(
                     f"{context_block}\n\n"
                     "INSTRUCTIONS:\n"
                     "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked.\n"
-                    "   - For an individual faculty member/teacher/person inquiry (e.g., 'Who is Dr. X?', 'Tell me about X'): Provide their full profile including Designation & Department, Contact Email, Academic Qualifications, full Professional Work Experience / Employment History (all prior and current roles, institutions, dates), notable publications, research domains, awards, and honors. Only list fields that are present in the data; do NOT output placeholder labels like 'Not specified' or 'N/A' for missing fields.\n"
+                    "   - For an individual faculty member query (e.g., 'Tell me about [Name]', 'Who is [Name]?'):\n"
+                    "     * Start with an introductory sentence: '[Name] is an [Designation] in the Department of [Department] at SIES Graduate School of Technology (SIES GST). Here are key details about [him/her]:'\n"
+                    "     * ### Academic Background\n"
+                    "       - **Qualifications:** [degrees/qualifications]\n"
+                    "       - **Employee ID:** [Employee ID from Department Roster Data] (if available)\n"
+                    "       - **Date of Joining:** [Date of Joining] (if available)\n"
+                    "       - **Designation:** [Designation]\n"
+                    "       - **Department:** [Department]\n"
+                    "       - **Contact Email:** [email] (if available)\n"
+                    "       - **Status of Appointment:** [Status] (if available)\n"
+                    "     * ### Teaching Responsibilities\n"
+                    "       - **Courses Taught:**\n"
+                    "         * [Course 1]\n"
+                    "         * [Course 2]\n"
+                    "     * ### Professional Work Experience\n"
+                    "       Format as a clean Markdown table with columns:\n"
+                    "       | Designation | Organization | Location | From Date | To Date |\n"
+                    "     * ### Research and Publications\n"
+                    "       Format Conference Contributions and Journal Publications as clean Markdown table(s) with columns:\n"
+                    "       | Date / Academic Year | Title | Type / Level |\n"
+                    "     * ### Professional Development\n"
+                    "       Format workshops, training programs, FDPs & STTPs as a clean Markdown table with columns:\n"
+                    "       | Date | Program Title | Type / Level | Role | Venue |\n"
+                    "     * ### Achievements and Certifications\n"
+                    "       Format as a clean Markdown table with columns:\n"
+                    "       | Academic Year | Certification / Award | Details |\n"
+                    "     * CRITICAL: ALWAYS include Employee ID and Date of Joining in Academic Background if available in the data.\n"
+                    "     * CRITICAL: NEVER output boilerplate placeholder phrases like 'Not explicitly specified in the provided data', 'Not specified', or 'N/A'. If data for a section is missing, completely omit that section heading.\n"
+                    "     * Conclude with: 'For more details, visit her faculty profile page.' (or his profile page).\n"
                     "   - For a department faculty list / roster query (e.g., 'Who are the faculty in Computer Engineering?', 'List IT faculty'): Present a clean, query-specific Markdown table or structured list with Name, Designation, and Qualification. Do NOT output repetitive placeholder lines like 'Date of Joining: Not specified', 'Research Areas: Not specified'. Only include additional details (such as Date of Joining or Status) if explicitly requested.\n"
                     "   - For a specific attribute inquiry (e.g., 'Who is the HOD of CE?', 'What are the awards of Dr. X?', 'Qualification of Dr. Y'): Answer directly, accurately, and concisely with ONLY the requested information without dumping entire profiles.\n"
                     "   - If asked about a cell/committee: provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs.\n"
@@ -935,6 +985,56 @@ def get_syllabus_courses_regex() -> re.Pattern | None:
     return _syllabus_courses_re
 
 
+_faculty_names_re: re.Pattern | None = None
+
+
+def get_faculty_names_regex() -> re.Pattern | None:
+    global _faculty_names_re
+    if _faculty_names_re is None:
+        try:
+            pages = sa.load_or_build_pages(refresh=False)
+            stopwords = {
+                "and", "for", "the", "with", "from", "sies", "gst", "college", "school",
+                "technology", "department", "engineering", "science", "humanities",
+                "view", "material", "date", "course", "courses", "staff", "name",
+                "principal", "leadership", "assistant", "professor", "associate",
+                "lecturer", "faculty", "member", "head", "degree", "status", "about",
+                "computer", "information", "mechanical", "electronics", "telecommunication",
+                "electrical", "civil", "applied", "general", "first", "second", "third",
+                "year", "semester", "academic", "institute", "institution", "university",
+                "mumbai", "navi", "thane", "pune", "india", "maharashtra",
+            }
+            tokens: set[str] = set()
+            for p in pages:
+                url = p.get("url", "")
+                lines = p.get("lines", [])
+                if "/faculty/" in url:
+                    slug = url.split("/faculty/")[-1].strip("/")
+                    for pt in slug.split("-"):
+                        if len(pt) >= 4 and pt.lower() not in stopwords:
+                            tokens.add(pt.lower())
+                    clean_slug = slug.replace("-", " ").strip().lower()
+                    if len(clean_slug) >= 4 and clean_slug not in stopwords:
+                        tokens.add(clean_slug)
+                for l in lines:
+                    if l.startswith("Name of the Staff:"):
+                        m = re.search(r"Name of the Staff:\s*(?:dr\.?|mr\.?|ms\.?|mrs\.?|prof\.?)?\s*([^;]+)", l, re.I)
+                        if m:
+                            raw_name = m.group(1).strip()
+                            clean_name = re.sub(r"[\.\-]+", " ", raw_name).strip()
+                            words = [w.lower() for w in clean_name.split() if len(w) >= 4 and w.lower() not in stopwords]
+                            if len(words) >= 2:
+                                tokens.add(" ".join(words))
+                            for w in words:
+                                tokens.add(w)
+            if tokens:
+                pattern = r"\b(?:" + "|".join(sorted([re.escape(t) for t in tokens], key=len, reverse=True)) + r")\b"
+                _faculty_names_re = re.compile(pattern, re.IGNORECASE)
+        except Exception as e:
+            log.warning("Could not build dynamic faculty names regex: %s", e)
+    return _faculty_names_re
+
+
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
     r"exam|examination|scheme|internal assessment|assessment|evaluation|term\s*work|bifurcation|distribution|"
@@ -972,10 +1072,17 @@ FAST_DOCUMENT_RE = re.compile(
 )
 
 FAST_WEBSITE_RE = re.compile(
-    r"\b(who\s+is|who\s+was|who\s+are|dr\.?|ms\.?|mr\.?|prof\.?|faculty|teacher|prof|professor|hod|principal|dean|admissions?|fees?|placements?|"
-    r"packages?|highest package|average package|companies|recruiters|campus|canteen|library|"
-    r"hostel|events?|fest|rotaract|student council|contact|address|location|reach|bus|train|"
+    r"\b(who\s+is|who\s+was|who\s+are|tell\s+me\s+about|details\s+of|profile\s+of|bio\s+of|"
+    r"dr\.?|ms\.?|mr\.?|mrs\.?|prof\.?|professor|faculty|teachers?|staff|lecturer|instructor|ma\'?am|mam|sir|madam|hod|principal|dean|admissions?|fees?|placements?|"
+    r"packages?|highest package|average package|companies|recruiters|campus|canteen|cafeteria|mess|library|"
+    r"hostel|events?|fest|cultural fest|tech fest|rotaract|student council|contact|address|location|reach|bus|train|"
     r"railway|concession|documents? required|eligibility criteria|"
+    r"facilities|infrastructure|auditorium|gymkhana|sports|ground|wifi|"
+    r"timings?|working\s+hours?|holiday|vacation|academic\s+calendar|exam\s+cell|"
+    r"cut\s*offs?|cap\s*round|dse|direct\s*second\s*year|seat\s*matrix|"
+    r"scholarships?|financial\s*aid|fee\s*structure|"
+    r"lakshya|cognition|tatva|saison|tedx|ecell|e-cell|gdsc|dsc|"
+    r"about\s+(?:sies|gst|college|campus|institute)|vision|mission|"
     # College-wide degree programs, branches, courses offered
     r"courses?\s+offered|programs?\s+offered|degrees?\s+offered|branches?\s+offered|"
     r"courses?\s+available|programs?\s+available|degrees?\s+available|branches?\s+available|"
@@ -1000,8 +1107,9 @@ FAST_WEBSITE_RE = re.compile(
 
 
 def fast_classify_intent(query: str) -> str | None:
-    # 1. Institutional cells, committees, faculty, HOD, campus always route to website
-    if FAST_WEBSITE_RE.search(query):
+    # 1. Faculty names, staff names, institutional cells, committees, faculty, HOD, campus route to website
+    fac_rgx = get_faculty_names_regex()
+    if (fac_rgx and fac_rgx.search(query)) or FAST_WEBSITE_RE.search(query):
         return "website"
     # 2. PDF documents, policies, brochures route to document
     if FAST_DOCUMENT_RE.search(query):
@@ -1015,7 +1123,7 @@ def fast_classify_intent(query: str) -> str | None:
         from rag.query_rewriter import reframe_query
         expanded = reframe_query(query)
         if expanded != query:
-            if FAST_WEBSITE_RE.search(expanded):
+            if (fac_rgx and fac_rgx.search(expanded)) or FAST_WEBSITE_RE.search(expanded):
                 return "website"
             if (crgx and crgx.search(expanded)) or FAST_SYLLABUS_RE.search(expanded):
                 return "syllabus"
@@ -1058,7 +1166,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             from agent import Message
 
             intent_task = asyncio.create_task(Runner.run(intent_agent, last_message))
-            result = await intent_task
+            result = await asyncio.wait_for(intent_task, timeout=3.5)
             parsed = result.final_output_as(Message)
             intent = parsed.intent
         except (asyncio.CancelledError, GeneratorExit):
@@ -1068,6 +1176,19 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
+        except asyncio.TimeoutError:
+            log.warning("Intent classification timed out after 3.5s, using fast heuristic fallback")
+            fac_rgx = get_faculty_names_regex()
+            if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
+                intent = "website"
+            elif FAST_DOCUMENT_RE.search(last_message):
+                intent = "document"
+            else:
+                crgx = get_syllabus_courses_regex()
+                if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
+                    intent = "syllabus"
+                else:
+                    intent = "website"
         except Exception as e:
             if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
                 log.info("Cancelled during intent classification for req_id: %s", req_id)
@@ -1077,13 +1198,17 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     headers=SSE_HEADERS,
                 )
             log.error(f"Intent classifier failed: {e}")
-            crgx = get_syllabus_courses_regex()
-            if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
-                intent = "syllabus"
+            fac_rgx = get_faculty_names_regex()
+            if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
+                intent = "website"
             elif FAST_DOCUMENT_RE.search(last_message):
                 intent = "document"
             else:
-                intent = "website"
+                crgx = get_syllabus_courses_regex()
+                if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
+                    intent = "syllabus"
+                else:
+                    intent = "website"
         finally:
             if req_id:
                 ACTIVE_REQUESTS.pop(req_id, None)
