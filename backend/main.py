@@ -398,7 +398,7 @@ async def stream_answer(
     if req_id:
         ACTIVE_REQUESTS[req_id] = cancel_this_stream
 
-    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+    if req_id and req_id in CANCELLED_REQUESTS:
         log.info("stream_answer aborted immediately for cancelled req_id: %s", req_id)
         yield sse("done")
         return
@@ -691,7 +691,7 @@ async def stream_pdf_answer(
     if req_id:
         ACTIVE_REQUESTS[req_id] = cancel_pdf_stream
 
-    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+    if req_id and req_id in CANCELLED_REQUESTS:
         log.info("stream_pdf_answer aborted immediately for cancelled req_id: %s", req_id)
         yield sse("done")
         return
@@ -1025,7 +1025,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
     last_message = req.messages[-1].content
     req_id = req.request_id or request.headers.get("x-request-id") or str(uuid.uuid4())
 
-    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+    if req_id and req_id in CANCELLED_REQUESTS:
         log.info("smart_chat aborted early for cancelled req_id: %s", req_id)
         return StreamingResponse(
             iter([sse("done")]),
@@ -1079,7 +1079,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             if req_id:
                 ACTIVE_REQUESTS.pop(req_id, None)
 
-    if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+    if req_id and req_id in CANCELLED_REQUESTS:
         log.info("smart_chat aborted before dispatching for req_id: %s", req_id)
         return StreamingResponse(
             iter([sse("done")]),
@@ -1105,7 +1105,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             if req_id:
                 ACTIVE_REQUESTS[req_id] = cancel_syllabus_stream
 
-            if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
+            if req_id and req_id in CANCELLED_REQUESTS:
                 log.info("stream_syllabus aborted immediately for cancelled req_id: %s", req_id)
                 yield sse("done")
                 return
@@ -1120,7 +1120,9 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
                 def run():
                     try:
-                        ask_sies_gpt(last_message, yield_callback=q.put, cancel_event=cancel_event)
+                        res = ask_sies_gpt(last_message, yield_callback=q.put, cancel_event=cancel_event)
+                        ans = res.get("answer", "") if isinstance(res, dict) else ""
+                        q.put({"type": "_fallback_answer", "answer": ans})
                     except Exception as e:
                         q.put(e)
                     finally:
@@ -1130,7 +1132,7 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 t.start()
 
                 while True:
-                    if request is not None and await request.is_disconnected():
+                    if request is not None and token_count > 0 and await request.is_disconnected():
                         log.info("Client disconnected detected in stream_syllabus: %s", req_id)
                         cancel_syllabus_stream()
                         break
@@ -1186,6 +1188,14 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                                 first_token_time = time.perf_counter()
                             token_count += 1
                             yield sse("token", text=item["text"])
+                        elif item["type"] == "_fallback_answer":
+                            if token_count == 0 and not cancel_event.is_set() and item.get("answer"):
+                                ans_tokens = re.findall(r"\S+|\n|\s+", item["answer"])
+                                for tok in ans_tokens:
+                                    if first_token_time is None:
+                                        first_token_time = time.perf_counter()
+                                    token_count += 1
+                                    yield sse("token", text=tok)
 
                 total_time = round(time.perf_counter() - start_time, 2)
                 ttft = round(first_token_time - start_time, 2) if first_token_time else total_time

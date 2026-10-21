@@ -1915,6 +1915,20 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
             res_lines.append(f"### Suggested List of Experiments\n\n{clean_exps}\n")
 
+        else:
+
+            outlines = section.get("module_outlines", [])
+
+            if outlines:
+
+                res_lines.append("### Course Modules\n")
+
+                for m in outlines:
+
+                    res_lines.append(format_self_learning_text(m.get("text", "")))
+
+                    res_lines.append("")
+
     else:
 
         outlines = section.get("module_outlines", [])
