@@ -90,8 +90,106 @@ PROJECTS = {
     'CEP801': ('Major Project III', 'Semester VIII', 6, '12# (Practical)', 'CIAP: 50, ESEP: 50 | Total: 100', 'MJP', 'Final Capstone Project phase / Industry Internship project with comprehensive evaluation, testing, and deployment.')
 }
 
+def extract_total_program_credits(query: str, retrieved_chunks=None) -> str | None:
+    has_credits = bool(re.search(r"\b(credits?|how\s+many\s+credits?|total\s+credits?|credit\s+distribution|allocated\s+credits?|assigned\s+credits?)\b", query, re.I))
+    if not has_credits:
+        return None
+
+    is_overall = bool(
+        re.search(r"\b(overall|in\s+total|total|all\s+together|altogether|8\s*sem(?:esters?)?|eight\s*sem(?:esters?)?|all\s*(?:8\s*)?sem(?:esters?)?|4\s*years?|four\s*years?|entire|complete|whole)\b", query, re.I)
+        or re.search(r"\b(computer\s+engineering|b\.?tech|b\.?e|degree|program|curriculum|ug\s+engineering)\b", query, re.I)
+    )
+    if not is_overall:
+        return None
+
+    # If query mentions a specific course code or specific individual course (e.g. CN, TCS, FEC101, etc.)
+    # let individual course handler handle it
+    codes = resolve_all_course_codes_from_query(query)
+    if codes:
+        return None
+
+    # If query asks about a single specific semester without 'all/8/overall/total', let semester structure handle it
+    m_single_sem = re.search(r"\b(?:sem(?:ester)?\s*([1-8]|I{1,3}|IV|V|VI|VII|VIII))\b", query, re.I)
+    if m_single_sem and not re.search(r"\b(all|8|eight|total|overall|together)\b", query, re.I):
+        return None
+
+    return (
+        "### B.Tech Computer Engineering - Total Program Credits & Semester-wise Distribution\n\n"
+        "According to the official autonomous curriculum structure (Page 3), the total number of credits required for the **Four-Year B.Tech in Computer Engineering** is **168 Credits** across all 8 semesters.\n\n"
+        "#### Semester-wise Credit Breakdown:\n"
+        "| Semester | Credits Assigned |\n"
+        "|:---:|:---:|\n"
+        "| **Semester I** | 21 |\n"
+        "| **Semester II** | 21 |\n"
+        "| **Semester III** | 22 |\n"
+        "| **Semester IV** | 21 |\n"
+        "| **Semester V** | 22 |\n"
+        "| **Semester VI** | 22 |\n"
+        "| **Semester VII** | 20 |\n"
+        "| **Semester VIII** | 19 |\n"
+        "| **Total Credits (Major)** | **168** |\n\n"
+        "---\n\n"
+        "#### Category-wise Credit Distribution:\n"
+        "| Course Category | Sem I | Sem II | Sem III | Sem IV | Sem V | Sem VI | Sem VII | Sem VIII | Total Credits |\n"
+        "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|\n"
+        "| **Basic Science Course (BSC) / ESC** | 7 | 6 | -- | -- | -- | -- | -- | -- | **13** |\n"
+        "| **Engineering Science Course (ESC)** | 9 | 10 | -- | -- | -- | -- | -- | -- | **19** |\n"
+        "| **Program Core Course (PCC)** | -- | -- | 17 | 11 | 11 | 10 | 04 | -- | **53** |\n"
+        "| **Program Elective Course (PEC)** | -- | -- | -- | -- | 04 | 04 | 07 | -- | **15** |\n"
+        "| **Multidisciplinary Minor (MDM)** | -- | 03 | 04 | 04 | 04 | -- | -- | -- | **15** |\n"
+        "| **Open Elective (OE)** | -- | -- | -- | -- | -- | -- | 03 | 03 | **06** |\n"
+        "| **Vocational & Skill Enhancement (VSEC)** | 01 | 01 | 02 | 02 | -- | 02 | -- | -- | **08** |\n"
+        "| **Ability Enhancement Course (HSSM / AEC)** | 02 | -- | -- | 02 | -- | -- | -- | -- | **04** |\n"
+        "| **Entrepreneurship / Economics / Management** | -- | 02 | 02 | -- | -- | -- | -- | -- | **04** |\n"
+        "| **Indian Knowledge System (IKS)** | 02 | -- | -- | -- | -- | -- | -- | -- | **02** |\n"
+        "| **Value Education Course (VEC)** | -- | -- | -- | 02 | -- | -- | -- | -- | **02** |\n"
+        "| **Research Methodology (RM)** | -- | -- | -- | -- | -- | -- | -- | 03 | **03** |\n"
+        "| **Community Engagement / Field Project (FP)** | -- | -- | 01 | 01 | -- | -- | -- | -- | **02** |\n"
+        "| **Major / Mini Project (MJP)** | -- | -- | -- | -- | 01 | 02 | 02 | 01 | **06** |\n"
+        "| **Internship / On Job Training (OJT)** | -- | -- | -- | -- | -- | -- | 12 | -- | **12** |\n"
+        "| **Co-curricular Courses (CC)** | 04 | -- | -- | -- | -- | -- | -- | -- | **04** |\n"
+        "| **Total Credits (Major)** | **21** | **21** | **22** | **21** | **22** | **22** | **20** | **19** | **168** |"
+    )
+
+def extract_course_nomenclature(query: str, retrieved_chunks=None) -> str | None:
+    if not re.search(r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum|curriculum\s+abbreviations?)\b", query, re.I):
+        return None
+    return (
+        "### Nomenclature of Courses in the Curriculum\n\n"
+        "| Abbreviation | Title / Category |\n"
+        "|:---:|---|\n"
+        "| **BSC** | Basic Science Courses |\n"
+        "| **ESC** | Engineering Science Courses |\n"
+        "| **PCC** | Program Core Courses |\n"
+        "| **PEC** | Program Elective Course |\n"
+        "| **MDM** | Multidisciplinary Minor |\n"
+        "| **OE** | Open Elective |\n"
+        "| **VSEC** | Vocational and Skill Enhancement Course |\n"
+        "| **AEC** | Ability Enhancement Course |\n"
+        "| **IKS** | Indian Knowledge System |\n"
+        "| **VEC** | Value Education Course |\n"
+        "| **RM** | Research Methodology |\n"
+        "| **CEP/FP** | Community Engagement Project / Field Project |\n"
+        "| **OJT** | Internship / On Job Training |\n"
+        "| **CC** | Cocurricular Courses |\n"
+        "| **ISE** | In Semester Examination |\n"
+        "| **MSE** | Mid Semester Examination |\n"
+        "| **ESE** | End Semester Examination |\n"
+        "| **CIAP** | Continuous Internal Assessment Practical |\n"
+        "| **ESEP** | End Semester Examination Practical |"
+    )
+
 def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str | None:
     q = query.strip()
+    # Total program credits / credit distribution
+    res_credits = extract_total_program_credits(q, retrieved_chunks)
+    if res_credits:
+        return res_credits
+
+    # 0. Nomenclature of courses in curriculum
+    if re.search(r'\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum|curriculum\s+abbreviations?)\b', q, re.I):
+        return extract_course_nomenclature(q, retrieved_chunks)
+
     # If query asks for structure along with electives or minors, let the combined handler at generate_answer handle it
     if re.search(r'\b(program\s+structure|curriculum\s+structure|course\s+structure|teaching\s+scheme)\b', q, re.I) and re.search(r'\b(electives?|minors?|mdms?)\b', q, re.I):
         return None
@@ -326,7 +424,7 @@ def extract_semester_program_structure(query: str, retrieved_chunks) -> str | No
 
         re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure)\b", norm_q, re.I)
 
-        or (target_sem and re.search(r"\b(syllabus|curriculum|structure|subjects?|courses?|teaching scheme)\b", norm_q, re.I))
+        or (target_sem and re.search(r"\b(syllabus|curriculum|structure|subjects?|courses?|teaching scheme|credits?)\b", norm_q, re.I))
 
     )
 
@@ -1018,27 +1116,21 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
         return None
 
     results = []
-
+    seen_titles = set()
     for target_code in target_codes:
-
         if target_code not in sections:
-
             continue
-
         section = sections[target_code]
-
         course_name = extract_course_name_from_header(section["header"])
-
-        outlines = section.get("module_outlines", [])
-
-        if not outlines:
-
+        clean_title = re.sub(r"\s+", " ", course_name).strip().lower()
+        if clean_title in seen_titles:
             continue
-
+        seen_titles.add(clean_title)
+        outlines = section.get("module_outlines", [])
+        if not outlines:
+            continue
         header = f"### {target_code}: {course_name} - Course Modules\n\n"
-
         module_texts = [format_self_learning_text(m.get("text", "")) for m in outlines]
-
         results.append(header + "\n\n---\n\n".join(module_texts))
 
     if not results:
@@ -1610,10 +1702,12 @@ def resolve_all_course_codes_from_query(query: str, retrieved_chunks=None) -> li
     q_upper = query.upper()
 
     # 1. Check explicit course codes in query (e.g. CEC501, FEC204)
+    explicit_codes: set[str] = set()
     for m in re.finditer(r"\b[A-Z]{2,6}\d{3,4}[A-Z0-9/]*\b", q_upper):
         code = m.group()
         if code in sections:
             matches.append((m.start(), m.end(), code))
+            explicit_codes.add(code)
 
     # 2. Check acronyms & aliases in query (longest alias key first)
     for acr in sorted(ACRONYM_TO_COURSE_CODE.keys(), key=len, reverse=True):
@@ -1640,25 +1734,59 @@ def resolve_all_course_codes_from_query(query: str, retrieved_chunks=None) -> li
         s = re.sub(r"\bi\b", "1", s)
         return " ".join(s.split())
 
-    q_norm = _normalize_tokens(query)
+    is_sem2 = bool(re.search(r"\b(?:sem(?:ester)?\s*(?:2|ii|two)|2nd\s*sem(?:ester)?|second\s*sem(?:ester)?)\b", query, re.I))
+
+    # Group codes by normalized course name
+    cname_to_codes: dict[str, list[str]] = {}
     for code, sec in sections.items():
         cname = extract_course_name_from_header(sec["header"])
         cname_norm = _normalize_tokens(cname)
         if len(cname_norm) > 4:
-            pattern = rf"\b{re.escape(cname_norm)}\b"
-            for m in re.finditer(pattern, q_norm):
-                start, end = m.start(), m.end()
-                if not any(code == mc for _, _, mc in matches):
-                    matches.append((start, end, code))
+            cname_to_codes.setdefault(cname_norm, []).append(code)
+
+    q_norm = _normalize_tokens(query)
+    norm_matches: list[tuple[int, int, str]] = []
+    already_matched_codes = {c for _, _, c in matches}
+
+    for cname_norm in sorted(cname_to_codes.keys(), key=len, reverse=True):
+        pattern = rf"\b{re.escape(cname_norm)}\b"
+        for m in re.finditer(pattern, q_norm):
+            start, end = m.start(), m.end()
+            if any(max(start, ms) < min(end, me) for ms, me, _ in norm_matches):
+                continue
+
+            codes = cname_to_codes[cname_norm]
+            # Disambiguate if multiple codes share the same course name (e.g. FEC1021 vs FEC2021)
+            if len(codes) == 1:
+                chosen_code = codes[0]
+            else:
+                if is_sem2:
+                    sem2_candidates = [c for c in codes if re.match(r"^[A-Z]{2,4}2", c)]
+                    chosen_code = sem2_candidates[0] if sem2_candidates else codes[0]
+                else:
+                    sem1_candidates = [c for c in codes if re.match(r"^[A-Z]{2,4}1", c)]
+                    chosen_code = sem1_candidates[0] if sem1_candidates else codes[0]
+
+            norm_matches.append((start, end, chosen_code))
+            if chosen_code not in already_matched_codes:
+                matches.append((start, end, chosen_code))
+                already_matched_codes.add(chosen_code)
 
     if matches:
         matches.sort(key=lambda x: x[0])
-        seen = set()
+        seen_codes = set()
+        seen_titles = set()
         res = []
         for _, _, c in matches:
-            if c not in seen:
-                seen.add(c)
-                res.append(c)
+            if c not in sections or c in seen_codes:
+                continue
+            cname = extract_course_name_from_header(sections[c]["header"])
+            cname_clean = _normalize_tokens(cname)
+            if cname_clean in seen_titles and c not in explicit_codes:
+                continue
+            seen_codes.add(c)
+            seen_titles.add(cname_clean)
+            res.append(c)
         return res
 
     # 4. Fallback to retrieved chunks metadata
@@ -2060,19 +2188,18 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
         return None
 
     if len(target_codes) > 1:
-
         multi_parts = []
-
+        seen_titles = set()
         for code in target_codes:
-
             if code in sections:
-
+                cname = extract_course_name_from_header(sections[code]["header"])
+                clean_title = re.sub(r"\s+", " ", cname).strip().lower()
+                if clean_title in seen_titles:
+                    continue
+                seen_titles.add(clean_title)
                 multi_parts.append(build_course_full_markdown(code, sections[code], sections))
-
         if multi_parts:
-
             return "\n\n==============================\n\n".join(multi_parts)
-
         return None
 
     target_code = target_codes[0]
@@ -2786,8 +2913,17 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
     wants_exam = bool(re.search(r"\b(examination\s+scheme|exam\s+scheme|marks\s+distribution|evaluation\s+scheme|assessment\s+scheme|ise|mse|ese)\b", query, re.I))
 
     if not (wants_credits or wants_teaching or wants_exam):
-
         return None
+
+    # Do not match overall program credit questions (handled by extract_total_program_credits)
+    if re.search(r"\b(computer\s+engineering|overall|in\s+total|total\s+credits?|all\s+together|altogether|8\s*sem|eight\s*sem|b\.?tech|degree|program|curriculum)\b", query, re.I):
+        if not resolve_all_course_codes_from_query(query):
+            return None
+
+    # Do not match whole semester queries (handled by extract_semester_program_structure)
+    if re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8]|I{1,3}|IV|V|VI|VII|VIII)\b", query, re.I):
+        if not resolve_all_course_codes_from_query(query):
+            return None
 
     sections = get_sections_dict()
 
@@ -3029,22 +3165,16 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
 
         re.search(r"\b(program structure|curriculum structure|teaching scheme|course structure|subject structure|structure)\b", check_query, re.I)
 
-        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:subjects?|courses?|curriculum|syllabus)\b", check_query, re.I)
-
-        or re.search(r"\b(?:subjects?|courses?|curriculum|syllabus)\b.*\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b", check_query, re.I)
-
-        or re.search(r"\b(?:subjects?|courses?|curriculum|syllabus)\b.*\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b", check_query, re.I)
-
-        or re.search(r"\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b.*\b(?:subjects?|courses?|curriculum|syllabus)\b", check_query, re.I)
+        or re.search(r"\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b.*\b(?:subjects?|courses?|curriculum|syllabus|credits?)\b", check_query, re.I)
+        or re.search(r"\b(?:subjects?|courses?|curriculum|syllabus|credits?)\b.*\b(?:sem(?:ester)?|term)\s*([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\b", check_query, re.I)
+        or re.search(r"\b(?:subjects?|courses?|curriculum|syllabus|credits?)\b.*\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b", check_query, re.I)
+        or re.search(r"\b([1-8](?:st|nd|rd|th)?|I|II|III|IV|V|VI|VII|VIII)\s*(?:sem(?:ester)?|term)\b.*\b(?:subjects?|courses?|curriculum|syllabus|credits?)\b", check_query, re.I)
 
     )
 
     # If a specific course is named and query is not asking for whole semester structure, prioritize course
-
-    target_code_in_query = resolve_course_code_from_query(check_query, retrieved_chunks)
-
+    target_code_in_query = resolve_course_code_from_query(check_query)
     if target_code_in_query and not re.search(r"\b(program structure|curriculum structure|course structure|all subjects|all courses|teaching scheme)\b", check_query, re.I):
-
         wants_structure = False
 
     wants_electives = bool(re.search(r"\b(electives?|elective options?|minors?|mdms?|multidisciplinary)\b", check_query, re.I))
@@ -3145,55 +3275,9 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
 
         return early_return(fast_outline)
 
-    if re.search(r"\b(credit distribution|credits? distribution|semester-?wise credit)\b", check_query, re.IGNORECASE):
-
-        table_text = """According to page 3 of the syllabus documents, the Semester-wise Credit Distribution Structure for Four Year UG Engineering is as follows:
-
-| Course Category | I | II | III | IV | V | VI | VII | VIII | Total |
-
-|---|---|---|---|---|---|---|---|---|---|
-
-| Basic Science Course (BSC) / ESC | 7 | 6 | - | - | - | - | - | - | 13 |
-
-| Engineering Science Course (ESC) | 9 | 10 | - | - | - | - | - | - | 19 |
-
-| Program Core Course (PCC) | - | - | 17 | 11 | 11 | 10 | 04 | - | 53 |
-
-| Program Elective Course (PEC) | - | - | - | - | 04 | 04 | 07 | - | 15 |
-
-| Multidisciplinary Minor (MDM) | - | 03 | 04 | 04 | 04 | - | - | - | 15 |
-
-| Open Elective (OE) | - | - | - | - | - | - | 03 | 03 | 06 |
-
-| Vocational and Skill Enhancement Course (VSEC) | 01 | 01 | 02 | 02 | - | 02 | - | - | 08 |
-
-| Ability Enhancement Course (HSSM / AEC) | 02 | - | - | 02 | - | - | - | - | 04 |
-
-| Entrepreneurship / Management (HSSM) | - | 02 | 02 | - | - | - | - | - | 04 |
-
-| Indian Knowledge System (IKS) | 02 | - | - | - | - | - | - | - | 02 |
-
-| Value Education Course (VEC) | - | - | - | 02 | - | - | - | - | 02 |
-
-| Research Methodology (RM) | - | - | - | - | - | - | - | 03 | 03 |
-
-| Community Engagement / Field Project (FP) | - | - | 01 | 01 | - | - | - | - | 02 |
-
-| Project | - | - | - | - | 01 | 02 | 02 | 01 | 06 |
-
-| Internship / On Job Training (OJT) | - | - | - | - | - | - | 12 | - | 12 |
-
-| Co-curricular Courses (CC) | 04 | - | - | - | - | - | - | - | 04 |
-
-| **Total Credits (Major)** | **21** | **21** | **22** | **21** | **22** | **22** | **20** | **19** | **168** |"""
-
-        return early_return(table_text)
-
-    if re.search(r"\b(total credits?|total number of credits?|credits? for (?:the )?(?:b\.?tech|degree|program|engineering))\b", check_query, re.IGNORECASE):
-
-        total_text = "According to the syllabus documents (Page 3), the total number of credits required for the B.Tech Computer Engineering program is **168 credits** across all 8 semesters (Sem I: 21, Sem II: 21, Sem III: 22, Sem IV: 21, Sem V: 22, Sem VI: 22, Sem VII: 20, Sem VIII: 19)."
-
-        return early_return(total_text)
+    res_tot_cred = extract_total_program_credits(check_query, retrieved_chunks)
+    if res_tot_cred:
+        return early_return(res_tot_cred)
 
     context_parts = []
 

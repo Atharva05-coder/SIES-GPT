@@ -230,53 +230,98 @@ def extract_page_repr(
     if not lines:
         return fallback_text[:max_chars].strip()
 
-    # Specialized structuring for faculty profiles to ensure bio, degrees, courses, publications, FDPs/workshops, and full work experience are preserved
+    # Specialized structuring for faculty profiles to ensure bio, degrees, courses, work experience, awards, and publications are preserved
     if "/faculty/" in url.lower():
         nav_words = {
             "courses", "publications", "papers", "participations",
-            "awards", "assignments", "achievements", "material url: view material"
+            "awards", "assignments", "achievements", "material url: view material",
+            "date", "title", "presented/published", "level", "academic year", "organizer / venue"
         }
         bio_lines: list[str] = []
         course_lines: list[str] = []
         exp_lines: list[str] = []
+        award_lines: list[str] = []
         pub_lines: list[str] = []
         dev_lines: list[str] = []
-        award_lines: list[str] = []
 
         for l in lines:
             s = l.strip()
             if not s or s.lower() in nav_words:
                 continue
             if s.startswith("From Date:"):
-                exp_lines.append(s)
-            elif s.startswith("Course Title:"):
-                course_lines.append(s.replace("; Material URL: View Material", ""))
-            elif s.startswith("Date:"):
-                if any(w in s for w in ["Type: Journal", "Type: Conference", "Level: National", "Level: International"]):
-                    pub_lines.append(s)
+                parts_dict = dict(p.strip().split(": ", 1) for p in s.split(";") if ": " in p)
+                desig = parts_dict.get("Designation", "").strip()
+                org = parts_dict.get("Organization", "").strip()
+                addr = parts_dict.get("Organization Address", "").strip()
+                from_d = parts_dict.get("From Date", "").strip()
+                to_d = parts_dict.get("To Date", "").strip()
+                loc_str = f" ({addr})" if addr else ""
+                date_str = f" (From: {from_d} to {to_d})" if from_d and to_d else (f" (From: {from_d})" if from_d else "")
+                exp_lines.append(f"- {desig} at {org}{loc_str}{date_str}")
+            elif s.startswith("Year:") or "Award Title:" in s or "Secured Best" in s or "Award" in s:
+                if "Award Title:" in s:
+                    parts_dict = dict(p.strip().split(": ", 1) for p in s.split(";") if ": " in p)
+                    title = parts_dict.get("Award Title", "").strip()
+                    by = parts_dict.get("Awarded By", "").strip()
+                    yr = parts_dict.get("Year", "").strip()
+                    by_str = f" (Awarded by: {by})" if by else ""
+                    yr_str = f" - {yr}" if yr else ""
+                    award_lines.append(f"- **{title}**{by_str}{yr_str}")
+                elif "Details:" in s:
+                    parts_dict = dict(p.strip().split(": ", 1) for p in s.split(";") if ": " in p)
+                    det = parts_dict.get("Details", "").strip()
+                    if det:
+                        award_lines.append(f"- {det}")
+                    else:
+                        award_lines.append(f"- {s}")
                 else:
-                    dev_lines.append(s)
-            elif "Type: " in s and any(k in s for k in ["Badge", "Certificate", "Award", "Academic Year:"]):
-                award_lines.append(s)
+                    award_lines.append(f"- {s}")
+            elif s.startswith("Course Title:"):
+                course_lines.append("- " + s.replace("; Material URL: View Material", "").replace("Course Title:", "").strip())
+            elif s.startswith("Date:"):
+                if any(w in s for w in ["Type: Journal", "Type: Proceedings", "Type: Book", "Type: Conference", "Level: National", "Level: International"]):
+                    pub_lines.append("- " + s)
+                else:
+                    dev_lines.append("- " + s)
+            elif "Type: " in s and any(k in s for k in ["Badge", "Certificate", "Award", "Academic Year:", "Co-curricular"]):
+                if "Details:" in s:
+                    parts_dict = dict(p.strip().split(": ", 1) for p in s.split(";") if ": " in p)
+                    det = parts_dict.get("Details", "").strip()
+                    if det:
+                        award_lines.append(f"- {det}")
+                    else:
+                        award_lines.append(f"- {s}")
+                else:
+                    award_lines.append(f"- {s}")
             else:
-                if not exp_lines and not pub_lines and not dev_lines and not course_lines:
+                if not exp_lines and not pub_lines and not dev_lines and not course_lines and not award_lines:
                     bio_lines.append(s)
 
         parts: list[str] = []
         if bio_lines:
-            parts.append("### Basic Profile & Academic Background\n" + "\n".join(bio_lines))
+            parts.append("### Overview & Academic Background\n" + "\n".join(bio_lines))
         if course_lines:
             parts.append("### Teaching Responsibilities (Courses Taught)\n" + "\n".join(course_lines))
+        if exp_lines:
+            parts.append("### Work Experience\n" + "\n".join(exp_lines))
+        if award_lines:
+            parts.append("### Awards, Honors & Achievements\n" + "\n".join(award_lines))
         if pub_lines:
             parts.append("### Research and Publications\n" + "\n".join(pub_lines))
         if dev_lines:
             parts.append("### Professional Development (Workshops, Training Programs, FDPs & STTPs)\n" + "\n".join(dev_lines))
-        if exp_lines:
-            parts.append("### Professional Work Experience\n" + "\n".join(exp_lines))
-        if award_lines:
-            parts.append("### Achievements and Certifications\n" + "\n".join(award_lines))
 
-        return "\n\n".join(parts)[:max_chars].strip()
+        base = "\n\n".join(parts)
+        remaining = max_chars - len(base)
+        if remaining > 300 and hit_chunks:
+            extra = []
+            for ch in hit_chunks:
+                sample = ch.split("\n")[0].strip()
+                if sample and sample not in base:
+                    extra.append(ch)
+            if extra:
+                base += "\n\n### Additional Relevant Records\n" + "\n\n".join(extra)[:remaining].strip()
+        return base[:max_chars].strip()
 
     # Department pages: if faculty lines exist, extract clean faculty roster without losing staff entries
     fac_lines = [l.strip() for l in lines if l.strip().startswith("Name of the Staff:")]
@@ -327,27 +372,30 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     top_url = searched_urls[0]
     p_obj = index.pages.get(sa.normalize_url(top_url))
     fallback_text = index.read_page(top_url) if not p_obj else ""
+    is_fac_page = "/faculty/" in top_url.lower()
+    top_max = 5000 if is_fac_page else 4000
+    second_max = 1200 if is_fac_page else 1200
     top_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == top_url and h.get("text")]
-    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=6000, query=query)
+    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=top_max, query=query)
 
     read_urls = [top_url]
-    if len(searched_urls) > 1:
+    if not is_fac_page and len(searched_urls) > 1:
         second_url = searched_urls[1]
         if second_url.rstrip("/") != top_url.rstrip("/"):
             p2_obj = index.pages.get(sa.normalize_url(second_url))
             fallback2 = index.read_page(second_url) if not p2_obj else ""
             second_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == second_url and h.get("text")]
-            second_content = extract_page_repr(second_url, p2_obj, fallback2, second_hit_chunks, max_chars=1800, query=query)
+            second_content = extract_page_repr(second_url, p2_obj, fallback2, second_hit_chunks, max_chars=second_max, query=query)
             if second_content:
                 full_content += f"\n\n--- Additional details ({second_url}) ---\n{second_content}"
                 read_urls.append(second_url)
 
-    if len(searched_urls) > 2:
+    if not is_fac_page and len(searched_urls) > 2:
         third_url = searched_urls[2]
         if third_url.rstrip("/") not in [top_url.rstrip("/"), second_url.rstrip("/")]:
             p3_obj = index.pages.get(sa.normalize_url(third_url))
             fallback3 = index.read_page(third_url) if not p3_obj else ""
-            third_content = extract_page_repr(third_url, p3_obj, fallback3, [], max_chars=1000, query=query)
+            third_content = extract_page_repr(third_url, p3_obj, fallback3, [], max_chars=800, query=query)
             if third_content:
                 full_content += f"\n\n--- Additional details ({third_url}) ---\n{third_content}"
                 read_urls.append(third_url)
@@ -460,41 +508,14 @@ async def stream_answer(
                     f"{user_query}\n\n"
                     f"{context_block}\n\n"
                     "INSTRUCTIONS:\n"
-                    "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked.\n"
-                    "   - For an individual faculty member query (e.g., 'Tell me about [Name]', 'Who is [Name]?'):\n"
-                    "     * Start with an introductory sentence: '[Name] is an [Designation] in the Department of [Department] at SIES Graduate School of Technology (SIES GST). Here are key details about [him/her]:'\n"
-                    "     * ### Academic Background\n"
-                    "       - **Qualifications:** [degrees/qualifications]\n"
-                    "       - **Employee ID:** [Employee ID from Department Roster Data] (if available)\n"
-                    "       - **Date of Joining:** [Date of Joining] (if available)\n"
-                    "       - **Designation:** [Designation]\n"
-                    "       - **Department:** [Department]\n"
-                    "       - **Contact Email:** [email] (if available)\n"
-                    "       - **Status of Appointment:** [Status] (if available)\n"
-                    "     * ### Teaching Responsibilities\n"
-                    "       - **Courses Taught:**\n"
-                    "         * [Course 1]\n"
-                    "         * [Course 2]\n"
-                    "     * ### Professional Work Experience\n"
-                    "       Format as a clean Markdown table with columns:\n"
-                    "       | Designation | Organization | Location | From Date | To Date |\n"
-                    "     * ### Research and Publications\n"
-                    "       Format Conference Contributions and Journal Publications as clean Markdown table(s) with columns:\n"
-                    "       | Date / Academic Year | Title | Type / Level |\n"
-                    "     * ### Professional Development\n"
-                    "       Format workshops, training programs, FDPs & STTPs as a clean Markdown table with columns:\n"
-                    "       | Date | Program Title | Type / Level | Role | Venue |\n"
-                    "     * ### Achievements and Certifications\n"
-                    "       Format as a clean Markdown table with columns:\n"
-                    "       | Academic Year | Certification / Award | Details |\n"
-                    "     * CRITICAL: ALWAYS include Employee ID and Date of Joining in Academic Background if available in the data.\n"
-                    "     * CRITICAL: NEVER output boilerplate placeholder phrases like 'Not explicitly specified in the provided data', 'Not specified', or 'N/A'. If data for a section is missing, completely omit that section heading.\n"
-                    "     * Conclude with: 'For more details, visit her faculty profile page.' (or his profile page).\n"
-                    "   - For a department faculty list / roster query (e.g., 'Who are the faculty in Computer Engineering?', 'List IT faculty'): Present a clean, query-specific Markdown table or structured list with Name, Designation, and Qualification. Do NOT output repetitive placeholder lines like 'Date of Joining: Not specified', 'Research Areas: Not specified'. Only include additional details (such as Date of Joining or Status) if explicitly requested.\n"
-                    "   - For a specific attribute inquiry (e.g., 'Who is the HOD of CE?', 'What are the awards of Dr. X?', 'Qualification of Dr. Y'): Answer directly, accurately, and concisely with ONLY the requested information without dumping entire profiles.\n"
-                    "   - If asked about a cell/committee: provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs.\n"
+                    "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked (e.g., if asked about a person/faculty/HOD, highlight their designation, roles, academic qualifications, experience, contact email, and institutional/committee appointments; if asked about a cell/committee, provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs).\n"
                     "2. Avoid dumping unrelated sections or general college blurbs that do not directly answer the specific question.\n"
-                    "3. Use clean Markdown formatting: organize your response with clear section headings where appropriate, bold labels (`- **Field:** Value`), or markdown tables.\n"
+                    "3. Use clean Markdown formatting: organize your response with clear section headings (e.g., ### Overview, ### Academic Background, ### Teaching Responsibilities, ### Work Experience, ### Awards, Honors & Achievements, ### Research and Publications, ### Professional Development, ### Objectives, ### Committee Members, ### Roles & Responsibilities), bold labels (`- **Field:** Value`), and bullet points.\n"
+                    "   - In Overview, list each detail on its own separate line or bullet (e.g., - **Name:** ..., - **Designation:** ..., - **Department:** ..., - **Contact Email:** ..., - **Qualifications:** ...). Never combine multiple fields into a single line.\n"
+                    "   - When presenting work experience for a faculty member, list each previous employment entry one by one in proper format: `- [Designation] at [Organization] ([Location]) (From: [From Date] to [To Date])`.\n"
+                    "   - When presenting awards, honors, or achievements, list each one as a distinct bullet point.\n"
+                    "   - For an individual faculty or person query, focus strictly on that individual; do NOT append a faculty roster, table of other department faculty, or other staff members at the end.\n"
+                    "   - Do NOT output boilerplate placeholder phrases like 'Not explicitly specified in the provided data', 'Employee ID: Not explicitly specified', or 'Not specified'; if data for a field or section is not in the text, simply omit that line or heading entirely.\n"
                     "4. For committees or teams, clearly list the Coordinator/Head followed by the members with their respective designations or departments.\n"
                     "5. Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page.\n"
                     "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"
@@ -1003,6 +1024,10 @@ def get_faculty_names_regex() -> re.Pattern | None:
                 "electrical", "civil", "applied", "general", "first", "second", "third",
                 "year", "semester", "academic", "institute", "institution", "university",
                 "mumbai", "navi", "thane", "pune", "india", "maharashtra",
+                "syllabus", "curriculum", "workshop", "module", "modules", "subject", "subjects",
+                "scheme", "credit", "credits", "examination", "exam", "practical", "practicals",
+                "lab", "labs", "laboratory", "laboratories", "project", "projects", "paper", "papers",
+                "journal", "journals", "conference", "conferences", "national", "international",
             }
             tokens: set[str] = set()
             for p in pages:
@@ -1011,18 +1036,35 @@ def get_faculty_names_regex() -> re.Pattern | None:
                 if "/faculty/" in url:
                     slug = url.split("/faculty/")[-1].strip("/")
                     for pt in slug.split("-"):
-                        if len(pt) >= 4 and pt.lower() not in stopwords:
+                        if len(pt) >= 3 and pt.lower() not in stopwords:
                             tokens.add(pt.lower())
+                    # If slug ends with a single letter initial like deepikak -> deepika
+                    m_initial = re.match(r"^([a-z]{4,})[a-z]$", slug.lower())
+                    if m_initial and m_initial.group(1) not in stopwords:
+                        tokens.add(m_initial.group(1))
                     clean_slug = slug.replace("-", " ").strip().lower()
-                    if len(clean_slug) >= 4 and clean_slug not in stopwords:
+                    if len(clean_slug) >= 3 and clean_slug not in stopwords:
                         tokens.add(clean_slug)
+                    # Check first 4 lines of faculty page for short name lines (max 4 words)
+                    for l in lines[:4]:
+                        l_strip = l.strip()
+                        if l_strip.startswith("##") or "@" in l_strip or "Home" in l_strip or "Serving" in l_strip:
+                            continue
+                        clean_l = re.sub(r"^(?:dr|mr|ms|mrs|prof)\.?\s*", "", l_strip, flags=re.I)
+                        clean_l = re.sub(r"[^\w\s]", " ", clean_l).strip()
+                        words = [w.lower() for w in clean_l.split() if len(w) >= 3 and w.lower() not in stopwords]
+                        if 1 <= len(clean_l.split()) <= 4:
+                            if len(words) >= 2:
+                                tokens.add(" ".join(words))
+                            for w in words:
+                                tokens.add(w)
                 for l in lines:
                     if l.startswith("Name of the Staff:"):
                         m = re.search(r"Name of the Staff:\s*(?:dr\.?|mr\.?|ms\.?|mrs\.?|prof\.?)?\s*([^;]+)", l, re.I)
                         if m:
                             raw_name = m.group(1).strip()
                             clean_name = re.sub(r"[\.\-]+", " ", raw_name).strip()
-                            words = [w.lower() for w in clean_name.split() if len(w) >= 4 and w.lower() not in stopwords]
+                            words = [w.lower() for w in clean_name.split() if len(w) >= 3 and w.lower() not in stopwords]
                             if len(words) >= 2:
                                 tokens.add(" ".join(words))
                             for w in words:
@@ -1037,6 +1079,7 @@ def get_faculty_names_regex() -> re.Pattern | None:
 
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
+    r"nomenclature|course\s+nomenclature|"
     r"exam|examination|scheme|internal assessment|assessment|evaluation|term\s*work|bifurcation|distribution|"
     r"ese|ise|ciap|esep|mse|practicals?|experiments?|"
     r"labs?|textbooks?|references?|minors?|mdm|electives?|pep|oec|hours?|teaching scheme|"
@@ -1107,6 +1150,9 @@ FAST_WEBSITE_RE = re.compile(
 
 
 def fast_classify_intent(query: str) -> str | None:
+    # 0. Nomenclature / course abbreviations in curriculum route directly to syllabus
+    if re.search(r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum)\b", query, re.I):
+        return "syllabus"
     # 1. Faculty names, staff names, institutional cells, committees, faculty, HOD, campus route to website
     fac_rgx = get_faculty_names_regex()
     if (fac_rgx and fac_rgx.search(query)) or FAST_WEBSITE_RE.search(query):
@@ -1198,17 +1244,20 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     headers=SSE_HEADERS,
                 )
             log.error(f"Intent classifier failed: {e}")
-            fac_rgx = get_faculty_names_regex()
-            if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
-                intent = "website"
-            elif FAST_DOCUMENT_RE.search(last_message):
-                intent = "document"
+            if re.search(r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum)\b", last_message, re.I):
+                intent = "syllabus"
             else:
-                crgx = get_syllabus_courses_regex()
-                if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
-                    intent = "syllabus"
-                else:
+                fac_rgx = get_faculty_names_regex()
+                if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
                     intent = "website"
+                elif FAST_DOCUMENT_RE.search(last_message):
+                    intent = "document"
+                else:
+                    crgx = get_syllabus_courses_regex()
+                    if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
+                        intent = "syllabus"
+                    else:
+                        intent = "website"
         finally:
             if req_id:
                 ACTIVE_REQUESTS.pop(req_id, None)
