@@ -262,6 +262,13 @@ def extract_page_repr(
                 base += "\n\n### Notable Activities, Publications & Research\n" + "\n\n".join(extra)[:remaining].strip()
         return base.strip()
 
+    # Department pages: if faculty lines exist, extract clean faculty roster without losing staff entries
+    fac_lines = [l.strip() for l in lines if l.strip().startswith("Name of the Staff:")]
+    if fac_lines:
+        intro = "\n".join(lines[:10])[:400].strip()
+        fac_block = "\n".join(fac_lines)
+        return f"{intro}\n\n### Faculty Roster\n{fac_block}"[:max_chars].strip()
+
     # Generic pages: if hit_chunks matched and page is long, prioritize hit_chunks; otherwise raw text
     page_content = "\n".join(lines)
     if hit_chunks and len(page_content) > max_chars:
@@ -299,7 +306,7 @@ def prefetch_site_context(index: sa.SiteIndex, query: str) -> tuple[str, list[st
     p_obj = index.pages.get(sa.normalize_url(top_url))
     fallback_text = index.read_page(top_url) if not p_obj else ""
     top_hit_chunks = [h["text"].strip() for h in hits if h.get("url") == top_url and h.get("text")]
-    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=4500)
+    full_content = extract_page_repr(top_url, p_obj, fallback_text, top_hit_chunks, max_chars=5000)
 
     read_urls = [top_url]
     if len(searched_urls) > 1:
@@ -432,10 +439,12 @@ async def stream_answer(
                     f"{context_block}\n\n"
                     "INSTRUCTIONS:\n"
                     "1. Provide a comprehensive, detailed, and well-structured answer using the prefetched website data above, staying directly focused on what the user asked.\n"
-                    "   - If asked about a faculty member/teacher/HOD/person: ALWAYS include their Designation & Department, Tenure, Contact Email, Academic Qualifications, and full Professional Work Experience / Employment History (listing all prior and current roles, institutions/organizations, and dates if provided in the data). Also include their notable publications, research domains, awards, or student/faculty programs if available.\n"
+                    "   - For an individual faculty member/teacher/person inquiry (e.g., 'Who is Dr. X?', 'Tell me about X'): Provide their full profile including Designation & Department, Contact Email, Academic Qualifications, full Professional Work Experience / Employment History (all prior and current roles, institutions, dates), notable publications, research domains, awards, and honors. Only list fields that are present in the data; do NOT output placeholder labels like 'Not specified' or 'N/A' for missing fields.\n"
+                    "   - For a department faculty list / roster query (e.g., 'Who are the faculty in Computer Engineering?', 'List IT faculty'): Present a clean, query-specific Markdown table or structured list with Name, Designation, and Qualification. Do NOT output repetitive placeholder lines like 'Date of Joining: Not specified', 'Research Areas: Not specified'. Only include additional details (such as Date of Joining or Status) if explicitly requested.\n"
+                    "   - For a specific attribute inquiry (e.g., 'Who is the HOD of CE?', 'What are the awards of Dr. X?', 'Qualification of Dr. Y'): Answer directly, accurately, and concisely with ONLY the requested information without dumping entire profiles.\n"
                     "   - If asked about a cell/committee: provide its objectives, complete committee roster with coordinators and members, roles & responsibilities, and MoUs.\n"
                     "2. Avoid dumping unrelated sections or general college blurbs that do not directly answer the specific question.\n"
-                    "3. Use clean Markdown formatting: organize your response with clear section headings (e.g., ### Overview, ### Key Details, ### Academic Qualifications, ### Work Experience, ### Research & Publications, ### Awards & Honors), bold labels (`- **Field:** Value`), and bullet points.\n"
+                    "3. Use clean Markdown formatting: organize your response with clear section headings where appropriate, bold labels (`- **Field:** Value`), or markdown tables.\n"
                     "4. For committees or teams, clearly list the Coordinator/Head followed by the members with their respective designations or departments.\n"
                     "5. Do NOT use internal reasoning or thinking steps. Do NOT call search_site or read_page.\n"
                     "6. Do NOT include URLs or a 'Sources' section in your answer text (the interface renders source links separately).\n"

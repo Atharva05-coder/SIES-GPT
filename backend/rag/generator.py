@@ -958,26 +958,30 @@ def extract_course_module_count(query: str, retrieved_chunks=None) -> str | None
     if re.search(r"\b(experiments?|practicals?|credits?|marks?|hours?|teaching\s+scheme)\b", query, re.I) and not re.search(r"\bhow\s+many\s+modules\b", query, re.I):
         return None
 
-    target_code = resolve_course_code_from_query(query, retrieved_chunks)
-    if not target_code:
+    target_codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
+    if not target_codes:
         return None
 
     sections = get_sections_dict()
-    if target_code not in sections:
-        return None
+    blocks = []
+    for target_code in target_codes:
+        if target_code not in sections:
+            continue
+        sec = sections[target_code]
+        cname = extract_course_name_from_header(sec["header"])
+        outlines = extract_module_outlines(sec["pages"])
+        if not outlines:
+            continue
+        total_mods = len(outlines)
+        out = [f"According to the syllabus, there are {total_mods} modules in {cname} ({target_code}):\n"]
+        for o in outlines:
+            first_line = o["text"].split("\n")[0].replace("## ", "")
+            out.append(f"- {first_line}")
+        blocks.append("\n".join(out))
 
-    sec = sections[target_code]
-    cname = extract_course_name_from_header(sec["header"])
-    outlines = extract_module_outlines(sec["pages"])
-    if not outlines:
+    if not blocks:
         return None
-
-    total_mods = len(outlines)
-    out = [f"According to the syllabus, there are {total_mods} modules in {cname} ({target_code}):\n"]
-    for o in outlines:
-        first_line = o["text"].split("\n")[0].replace("## ", "")
-        out.append(f"- {first_line}")
-    return "\n".join(out)
+    return "\n\n==============================\n\n".join(blocks)
 
 def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
@@ -1007,27 +1011,41 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
     sections = get_sections_dict()
 
-    target_code = resolve_course_code_from_query(query, retrieved_chunks)
+    target_codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
 
-    if not target_code or target_code not in sections:
-
-        return None
-
-    section = sections[target_code]
-
-    course_name = extract_course_name_from_header(section["header"])
-
-    outlines = section.get("module_outlines", [])
-
-    if not outlines:
+    if not target_codes:
 
         return None
 
-    header = f"### {target_code}: {course_name} - Course Modules\n\n"
+    results = []
 
-    module_texts = [format_self_learning_text(m.get("text", "")) for m in outlines]
+    for target_code in target_codes:
 
-    return header + "\n\n---\n\n".join(module_texts)
+        if target_code not in sections:
+
+            continue
+
+        section = sections[target_code]
+
+        course_name = extract_course_name_from_header(section["header"])
+
+        outlines = section.get("module_outlines", [])
+
+        if not outlines:
+
+            continue
+
+        header = f"### {target_code}: {course_name} - Course Modules\n\n"
+
+        module_texts = [format_self_learning_text(m.get("text", "")) for m in outlines]
+
+        results.append(header + "\n\n---\n\n".join(module_texts))
+
+    if not results:
+
+        return None
+
+    return "\n\n==============================\n\n".join(results)
 
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
 
@@ -1522,11 +1540,11 @@ ACRONYM_TO_COURSE_CODE = {
 
     # TE Sem 5
 
-    "TCS": "CEC501",
+    "TCS": "CEC501", "THEORETICAL COMPUTER SCIENCE": "CEC501",
 
-    "SE": "CEC502", "SE LAB": "CEC502",
+    "SE": "CEC502", "SE LAB": "CEC502", "SOFTWARE ENGINEERING": "CEC502",
 
-    "CN": "CEC503", "CN LAB": "CEL502",
+    "CN": "CEC503", "CN LAB": "CEL502", "COMPUTER NETWORK": "CEC503", "COMPUTER NETWORKS": "CEC503",
 
     "DEVOPS": "CEL501", "DEVOPS LAB": "CEL501", "DOL": "CEL501",
 
@@ -1554,11 +1572,11 @@ ACRONYM_TO_COURSE_CODE = {
 
     # TE Sem 6
 
-    "SPCC": "CEC601", "SPCC LAB": "CEC601",
+    "SPCC": "CEC601", "SPCC LAB": "CEC601", "SYSTEM PROGRAMMING AND COMPILER CONSTRUCTION": "CEC601",
 
-    "CNS": "CEC602", "CNS LAB": "CEC602",
+    "CNS": "CEC602", "CNS LAB": "CEC602", "CRYPTOGRAPHY": "CEC602", "CRYPTOGRAPHY AND NETWORK SECURITY": "CEC602", "NETWORK SECURITY": "CEC602",
 
-    "AISC": "CEC603", "AI": "CEC603",
+    "AISC": "CEC603", "AI": "CEC603", "ARTIFICIAL INTELLIGENCE": "CEC603", "ARTIFICIAL INTELLIGENCE AND SOFT COMPUTING": "CEC603",
 
     "CI LAB": "CEL601", "CIL": "CEL601",
 
@@ -1574,7 +1592,7 @@ ACRONYM_TO_COURSE_CODE = {
 
     "DF": "CEPEC6013", "DF LAB": "CEPEL6013",
 
-    "NLP": "CEPEC6014", "NLP LAB": "CEPEL6014",
+    "NLP": "CEPEC6014", "NLP LAB": "CEPEL6014", "NATURAL LANGUAGE PROCESSING": "CEPEC6014",
 
     # Minors Sem 6
 
@@ -1586,20 +1604,27 @@ ACRONYM_TO_COURSE_CODE = {
 
 }
 
-def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | None:
+def resolve_all_course_codes_from_query(query: str, retrieved_chunks=None) -> list[str]:
     sections = get_sections_dict()
-    # 1. Check explicit course code in query
-    code_match = re.search(r"\b[A-Z]{2,6}\d{3,4}[A-Z0-9/]*\b", query.upper())
-    if code_match and code_match.group() in sections:
-        return code_match.group()
-    # 2. Check acronyms in query (sorted by longest acronym key first)
+    matches: list[tuple[int, int, str]] = []  # (start, end, code)
     q_upper = query.upper()
+
+    # 1. Check explicit course codes in query (e.g. CEC501, FEC204)
+    for m in re.finditer(r"\b[A-Z]{2,6}\d{3,4}[A-Z0-9/]*\b", q_upper):
+        code = m.group()
+        if code in sections:
+            matches.append((m.start(), m.end(), code))
+
+    # 2. Check acronyms & aliases in query (longest alias key first)
     for acr in sorted(ACRONYM_TO_COURSE_CODE.keys(), key=len, reverse=True):
         pattern = rf"\b{re.escape(acr)}\b"
-        if re.search(pattern, q_upper):
+        for m in re.finditer(pattern, q_upper):
             target = ACRONYM_TO_COURSE_CODE[acr]
             if target in sections:
-                return target
+                start, end = m.start(), m.end()
+                if not any(max(start, ms) < min(end, me) for ms, me, _ in matches):
+                    matches.append((start, end, target))
+
     # 3. Search course name in sections with robust token normalization
     def _normalize_tokens(s: str) -> str:
         s = s.lower()
@@ -1616,24 +1641,37 @@ def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | N
         return " ".join(s.split())
 
     q_norm = _normalize_tokens(query)
-    best = None
-    best_len = 0
     for code, sec in sections.items():
         cname = extract_course_name_from_header(sec["header"])
         cname_norm = _normalize_tokens(cname)
-        if len(cname_norm) > 4 and cname_norm in q_norm:
-            if len(cname_norm) > best_len:
-                best = code
-                best_len = len(cname_norm)
-    if best:
-        return best
+        if len(cname_norm) > 4:
+            pattern = rf"\b{re.escape(cname_norm)}\b"
+            for m in re.finditer(pattern, q_norm):
+                start, end = m.start(), m.end()
+                if not any(code == mc for _, _, mc in matches):
+                    matches.append((start, end, code))
+
+    if matches:
+        matches.sort(key=lambda x: x[0])
+        seen = set()
+        res = []
+        for _, _, c in matches:
+            if c not in seen:
+                seen.add(c)
+                res.append(c)
+        return res
+
     # 4. Fallback to retrieved chunks metadata
     if retrieved_chunks:
         for item in retrieved_chunks:
             meta = item.get("metadata", {})
             if meta.get("course_code") and meta["course_code"] in sections:
-                return meta["course_code"]
-    return None
+                return [meta["course_code"]]
+    return []
+
+def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | None:
+    codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
+    return codes[0] if codes else None
 
 def build_course_full_markdown(target_code: str, section: dict, sections: dict) -> str:
 
@@ -2015,9 +2053,31 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
 
     sections = get_sections_dict()
 
-    target_code = resolve_course_code_from_query(query, retrieved_chunks)
+    target_codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
 
-    if not target_code or target_code not in sections:
+    if not target_codes:
+
+        return None
+
+    if len(target_codes) > 1:
+
+        multi_parts = []
+
+        for code in target_codes:
+
+            if code in sections:
+
+                multi_parts.append(build_course_full_markdown(code, sections[code], sections))
+
+        if multi_parts:
+
+            return "\n\n==============================\n\n".join(multi_parts)
+
+        return None
+
+    target_code = target_codes[0]
+
+    if target_code not in sections:
 
         return None
 

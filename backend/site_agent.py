@@ -680,6 +680,10 @@ class SiteIndex:
             )
         )
 
+        is_dept_faculty_query = any(w in query_set for w in ["faculty", "staff", "teacher", "professor", "hod", "head"]) and any(
+            w in query_set for w in ["computer", "it", "information", "extc", "electronics", "ecs", "mech", "mechanical", "aids", "aiml", "ai"]
+        )
+
         ranked = []
         for index, (score, metadata) in enumerate(zip(scores, self.meta)):
             chunk = self.chunks[index]
@@ -692,8 +696,13 @@ class SiteIndex:
             if any(w in slug for w in ["computer-engineering", "information-technology", "electronics-telecommunication", "mechanical", "artificial-intelligence"]):
                 if any(w in query_set for w in ["computer", "engineering", "it", "information", "extc", "electronics", "aids"]):
                     dept_boost += 0.5
+                    if is_dept_faculty_query:
+                        dept_boost += 1.5
             if "faculty" in url and any(w in query_set for w in ["hod", "head", "faculty", "professor", "dr"]):
-                dept_boost += 0.35
+                if is_dept_faculty_query:
+                    dept_boost -= 1.0
+                else:
+                    dept_boost += 0.35
 
             if is_program_query:
                 if any(u in url for u in ["about-sies-gst", "first-year-engineering", "admissions-ug-engineering", "admissions-pg-engineering", "workingprof"]):
@@ -822,9 +831,13 @@ def build_agent(
 Today is {today}.
 
 Rules:
-1. Provide comprehensive, detailed, and well-structured answers using official website content. Do NOT abbreviate, summarize away, or omit key information (such as complete lists of committee members, coordinators, designations, objectives, roles, partnerships/MoUs, qualifications, and experience).
+1. Provide comprehensive, detailed, and well-structured answers using official website content. Stay directly focused on what the user asked without omitting key factual information.
+   - For an individual faculty member/teacher/person inquiry (e.g. 'Who is Dr. X?', 'Tell me about X'): Provide their full profile including Designation & Department, Qualifications, full Professional Work Experience / Employment History (roles, institutions, dates), Research Domains, Publications, and Awards. Only report fields available in the data; do NOT write 'Not specified' or 'N/A' for missing attributes.
+   - For a general department faculty roster query (e.g. 'Who are the faculty in Computer Engineering?', 'List IT faculty'): Present a clean, query-specific markdown table or structured list showing Name, Designation, and Qualification. Do NOT repeat boilerplate placeholders (e.g. never repeat 'Date of Joining: Not specified', 'Research Areas: Not specified'). If detailed info is explicitly requested, include available details.
+   - For specific attribute queries (e.g. 'Who is the HOD of Computer Engineering?', 'What are the awards of Dr. X?'): Answer directly and concisely with only the requested information.
+   - For committees or teams, clearly present the Coordinator/Head followed by all members with their designations.
 2. Format your response cleanly using standard Markdown:
-   - Use clear section headings (e.g., ### Overview, ### Programs Offered, ### Objectives, ### Committee Members, ### Key Details, ### Roles & Responsibilities, ### Collaborations & MoUs).
+   - Use clear section headings (e.g., ### Overview, ### Programs Offered, ### Objectives, ### Faculty Roster, ### Committee Members, ### Key Details, ### Roles & Responsibilities, ### Collaborations & MoUs).
    - Use structured bullet points (`- **Field:** Value`) or markdown tables for lists, attributes, intakes, and programs.
    - For questions about courses, branches, or programs offered at SIES GST, provide the complete, detailed breakdown:
      * **Undergraduate (B.Tech - 4 Years):** List all engineering branches along with their intake (e.g., Computer Engineering - 180, IT - 120, AI & DS - 120, AI & ML - 60, ECS - 60, EXTC - 60, CSE IoT & Cyber Security including Blockchain - 60, Mechanical - 60).
