@@ -90,15 +90,6 @@ PROJECTS = {
     'CEP801': ('Major Project III', 'Semester VIII', 6, '12# (Practical)', 'CIAP: 50, ESEP: 50 | Total: 100', 'MJP', 'Final Capstone Project phase / Industry Internship project with comprehensive evaluation, testing, and deployment.')
 }
 
-UHV_INFO = {
-    'title': 'Induction Cum Universal Human Values & Value Education',
-    'sem': 'Semester I',
-    'courses': [
-        ('FEL107', 'Induction Cum Universal Human Values', 'CC', 'Theory: --, Pract.: 5*, Tut.: --', '2.5 Credits', 'Continuous Assessment (CIAP): 50 Marks', 'Covers universal human values, self-exploration, harmony in self, family, society, and nature as per AICTE induction guidelines.'),
-        ('FEL106', 'Health, Wellness and Mindfulness', 'CC', 'Theory: --, Pract.: 2#+2, Tut.: --', '2 Credits', 'Continuous Assessment (CIAP): 50 Marks', 'Covers physical fitness, mental well-being, mindfulness techniques, stress management, and ethical living.')
-    ]
-}
-
 def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str | None:
     q = query.strip()
     
@@ -207,14 +198,45 @@ def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str |
                 out.append(f"| {c} | {p[0]} | {p[1]} | {p[2]} | {p[3]} | {p[4]} |")
             return '\n'.join(out)
 
-    # 6. UHV (Universal Human Values) and Induction
-    if re.search(r'\b(uhv|universal\s+human\s+values?|induction\s+cum|induction\s+program|health\s*,?\s*wellness|FEL107|FEL106)\b', q, re.I):
-        out = [f"### {UHV_INFO['title']} ({UHV_INFO['sem']})\n"]
-        out.append('| Course Code | Course Name | Category | Teaching Scheme | Credits | Examination Scheme | Description |')
-        out.append('|---|---|:---:|---|:---:|---|---|')
-        for code, name, cat, scheme, credits, exam, desc in UHV_INFO['courses']:
-            out.append(f"| {code} | {name} | {cat} | {scheme} | {credits} | {exam} | {desc} |")
-        return '\n'.join(out)
+    # 6. HWM (Health, Wellness and Mindfulness)
+    if re.search(r'\b(hwm|health\s*,?\s*wellness|mindfulness|FEL106)\b', q, re.I):
+        sections = get_sections_dict()
+        if 'FEL106' in sections:
+            if re.search(r'\b(modules?|units?)\b', q, re.I) and not re.search(r'\b(full|complete|overall)\b', q, re.I):
+                return extract_course_all_modules_only('FEL106 modules', retrieved_chunks)
+            return build_course_full_markdown('FEL106', sections['FEL106'], sections)
+
+    # 7. UHV (Universal Human Values) and Induction
+    if re.search(r'\b(uhv|universal\s+human\s+values?|induction\s+cum|induction\s+program|value\s+education|FEL107|CEL404)\b', q, re.I):
+        sections = get_sections_dict()
+        wants_sem1 = bool(re.search(r'\b(sem\s*1|sem(?:ester)?\s*i\b|first\s*year|fe|induction|FEL107)\b', q, re.I))
+        wants_sem4 = bool(re.search(r'\b(sem\s*4|sem(?:ester)?\s*iv\b|second\s*year|se|value\s*education|vec|CEL404)\b', q, re.I))
+        wants_modules = bool(re.search(r'\b(modules?|units?)\b', q, re.I) and not re.search(r'\b(full|complete|overall)\b', q, re.I))
+
+        if wants_sem1 and not wants_sem4:
+            if 'FEL107' in sections:
+                if wants_modules:
+                    return extract_course_all_modules_only('FEL107 modules', retrieved_chunks)
+                return build_course_full_markdown('FEL107', sections['FEL107'], sections)
+        elif wants_sem4 and not wants_sem1:
+            if 'CEL404' in sections:
+                if wants_modules:
+                    return extract_course_all_modules_only('CEL404 modules', retrieved_chunks)
+                return build_course_full_markdown('CEL404', sections['CEL404'], sections)
+        else:
+            out = ["### Universal Human Values (UHV) in Computer Engineering Curriculum\n"]
+            out.append("In the Autonomous curriculum, Universal Human Values is offered across two stages:\n")
+            out.append("1. **Semester I (FE):** FEL107 – Induction cum Universal Human Values")
+            out.append("2. **Semester IV (SE):** CEL404 – Value Education Course (UHV)\n")
+            if wants_modules:
+                m1 = extract_course_all_modules_only('FEL107 modules', retrieved_chunks) or ""
+                m4 = extract_course_all_modules_only('CEL404 modules', retrieved_chunks) or ""
+                out.append(f"#### 1. Semester I: FEL107 – Induction cum Universal Human Values\n\n{m1}\n\n---\n\n#### 2. Semester IV: CEL404 – Value Education Course (UHV)\n\n{m4}")
+            else:
+                c1 = build_course_full_markdown('FEL107', sections['FEL107'], sections) if 'FEL107' in sections else ""
+                c4 = build_course_full_markdown('CEL404', sections['CEL404'], sections) if 'CEL404' in sections else ""
+                out.append(f"#### 1. Semester I: FEL107 – Induction cum Universal Human Values\n\n{c1}\n\n---\n\n#### 2. Semester IV: CEL404 – Value Education Course (UHV)\n\n{c4}")
+            return '\n'.join(out)
 
     return None
 
@@ -1575,7 +1597,7 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
 
         if len(nums) >= 6:
 
@@ -2393,7 +2415,7 @@ def extract_course_assessment_and_evaluation(query: str, retrieved_chunks) -> st
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
 
         if len(nums) >= 6:
 
@@ -2663,7 +2685,7 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
 
         if len(nums) >= 6:
 

@@ -194,7 +194,8 @@ def reframe_query(query: str) -> str:
 
         (r"\bIKS\b", "Indian Knowledge System"),
 
-        (r"\bVEC\b|\bUHV\b", "Value Education Course (UHV)"),
+        (r"\bVEC\b", "Value Education Course (UHV)"),
+        (r"\bUHV\b", "Universal Human Values (UHV)"),
 
         (r"\bMP1A\b|\bMP\s*1A\b", "Mini Project 1A"),
 

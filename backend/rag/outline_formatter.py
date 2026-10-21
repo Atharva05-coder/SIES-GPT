@@ -1,7 +1,7 @@
 import re
 
 MODULE_HEADING = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(?:\1\s+)?(.+?)\s+(\d{1,2})\s*$")
-MODULE_START = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(.*)$")
+MODULE_START = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(?!\s*\d+\.\d+)(.*)$")
 UNIT_HEADING = re.compile(r"^\s*(?:[1-6](?:\.0|\.)?\s+)?([1-6])\.(\d+)\b\s*(.*)$")
 REFERENCE_HEADING = re.compile(
     r"^(Textbooks:|Reference books:|Online References:|Course Assessment:|End Semester Examination:|Course Objective[s]?:|Course Outcome[s]?:|Lab Objective[s]?:|Lab Outcome[s]?:)",
@@ -132,7 +132,32 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
         page_number = page["page_number"]
         for source_line in page.get("text", "").splitlines():
             line = " ".join(source_line.split())
-            if not line:
+            if not line or line == str(page_number) or line.isdigit():
+                continue
+            if line.startswith(
+                (
+                    "SIES Graduate School",
+                    "Department of Computer Engineering",
+                    "Department of Computer",
+                    "Bachelor of Engineering",
+                    "Bachelor of Technology",
+                )
+            ):
+                continue
+            if line.casefold() in {
+                "module",
+                "no.",
+                "unit",
+                "topics",
+                "topics hrs.",
+                "no. topics",
+                "mapped",
+                "learning",
+                "outcome",
+                "outcome (lo)",
+                "learning outcome (lo)",
+                "mapped learning outcome (lo)",
+            }:
                 continue
 
             module_match = MODULE_HEADING.match(line)
@@ -146,7 +171,8 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                 continue
 
             module_start = MODULE_START.match(line)
-            if module_start:
+            is_dot_zero = bool(re.match(r"^\s*[1-6]\.0\b", line))
+            if module_start and (not skip_references or is_dot_zero):
                 module_number = int(module_start.group(1))
                 heading_text = module_start.group(2).strip()
                 hours_match = re.match(r"^(.*?)\s+(\d{1,2})$", heading_text)
@@ -161,6 +187,8 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                     pending_module = (module_number, heading_text, page_number)
                 continue
 
+            unit_match = UNIT_HEADING.match(line)
+
             if pending_module:
                 module_number, heading_text, start_page = pending_module
                 combined_heading = " ".join((heading_text, line)).strip()
@@ -173,16 +201,28 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                         start_page,
                     )
                     pending_module = None
+                    continue
+                elif unit_match:
+                    start_module(
+                        module_number,
+                        heading_text,
+                        0,
+                        start_page,
+                    )
+                    pending_module = None
                 else:
-                    pending_module = (module_number, combined_heading, start_page)
-                continue
+                    if len(combined_heading) > 120 or REFERENCE_HEADING.match(line):
+                        pending_module = None
+                    else:
+                        pending_module = (module_number, combined_heading, start_page)
+                    continue
 
             if REFERENCE_HEADING.match(line):
-                skip_references = True
-                current_content = None
+                if current_module is not None:
+                    skip_references = True
+                    current_content = None
                 continue
 
-            unit_match = UNIT_HEADING.match(line)
             if skip_references:
                 if (
                     unit_match
@@ -203,28 +243,8 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                 current_content = None
                 continue
 
-            if line.casefold() in {
-                "module",
-                "no.",
-                "unit",
-                "topics hrs.",
-                "mapped",
-                "to",
-                "course",
-                "outcome",
-            }:
-                continue
-
             line = re.sub(r"\bCO\d+\b", "", line).strip()
-            if not line or line == str(page_number):
-                continue
-            if line.startswith(
-                (
-                    "SIES Graduate School",
-                    "Department of Computer Engineering",
-                    "Bachelor of Engineering",
-                )
-            ):
+            if not line:
                 continue
 
             if page_number not in module["pages"]:
@@ -265,9 +285,14 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
 
     outlines = []
     for module_number, module in sorted(modules.items()):
-        lines = [
-            f"## Module {module_number}: {module['title']} ({module['hours']} hours)"
-        ]
+        if module["hours"]:
+            lines = [
+                f"## Module {module_number}: {module['title']} ({module['hours']} hours)"
+            ]
+        else:
+            lines = [
+                f"## Module {module_number}: {module['title']}"
+            ]
         if module["description"]:
             lines.append(module["description"])
         lines.extend(
