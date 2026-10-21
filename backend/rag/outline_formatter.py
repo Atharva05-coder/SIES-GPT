@@ -4,7 +4,7 @@ MODULE_HEADING = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(?:\1\s+)?(.+?)\s+(\
 MODULE_START = re.compile(r"^\s*([1-6])(?:\.0\b|(?!\.)\s+)(?!\s*\d+\.\d+)(.*)$")
 UNIT_HEADING = re.compile(r"^\s*(?:[1-6](?:\.0|\.)?\s+)?([1-6])\.(\d+)\b\s*(.*)$")
 REFERENCE_HEADING = re.compile(
-    r"^(Textbooks:|Reference books:|Online References:|Course Assessment:|End Semester Examination:|Course Objective[s]?:|Course Outcome[s]?:|Lab Objective[s]?:|Lab Outcome[s]?:)",
+    r"^(Text\s*books?:|Reference\s*books?:|References?:|Online\s*References?:|Course\s*Assessment:|End\s*Semester\s*Examination:|Course\s*Objective[s]?:|Course\s*Outcome[s]?:|Lab\s*Objective[s]?:|Lab\s*Outcome[s]?:|Assessment\b|Term\s*Work\b)",
     re.IGNORECASE,
 )
 SELF_LEARNING_HEADING = re.compile(
@@ -132,8 +132,13 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
         page_number = page["page_number"]
         for source_line in page.get("text", "").splitlines():
             line = " ".join(source_line.split())
-            if not line or line == str(page_number) or line.isdigit():
+            if not line or line == str(page_number):
                 continue
+            if line.isdigit():
+                if pending_module and len(line) <= 2:
+                    pass
+                else:
+                    continue
             if line.startswith(
                 (
                     "SIES Graduate School",
@@ -243,7 +248,7 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                 current_content = None
                 continue
 
-            line = re.sub(r"\bCO\d+\b", "", line).strip()
+            line = re.sub(r"\b(?:CO|LO)\d+(?:\s*,\s*(?:CO|LO)\d+)*\b", "", line).strip()
             if not line:
                 continue
 
@@ -255,7 +260,7 @@ def extract_module_outlines(pages: list[dict]) -> list[dict]:
                 module["units"].append(
                     {
                         "number": f"{unit_match.group(1)}.{unit_match.group(2)}",
-                        "text": unit_match.group(3).strip(),
+                        "text": re.sub(r"\b(?:CO|LO)\d+(?:\s*,\s*(?:CO|LO)\d+)*\b", "", unit_match.group(3)).strip(),
                     }
                 )
                 current_content = ("units", len(module["units"]) - 1)

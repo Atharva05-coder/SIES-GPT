@@ -92,6 +92,9 @@ PROJECTS = {
 
 def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str | None:
     q = query.strip()
+    # If query asks for structure along with electives or minors, let the combined handler at generate_answer handle it
+    if re.search(r'\b(program\s+structure|curriculum\s+structure|course\s+structure|teaching\s+scheme)\b', q, re.I) and re.search(r'\b(electives?|minors?|mdms?)\b', q, re.I):
+        return None
     
     # 1. Program Electives (e.g. Program Elective-I, PE 1, PE-2)
     m_pe = re.search(r'\b(?:program\s+elective|pe)\s*[-_ ]?\s*([1-4]|I{1,3}|IV)\b', q, re.I)
@@ -241,7 +244,8 @@ def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str |
     return None
 
 def extract_semester_electives(query: str, retrieved_chunks=None) -> str | None:
-    return extract_special_academic_queries(query, retrieved_chunks)
+    cleaned = re.sub(r"\b(program\s+structure|curriculum\s+structure|course\s+structure|subject\s+structure|teaching\s+scheme|structure)\b", "", query, flags=re.I)
+    return extract_special_academic_queries(cleaned, retrieved_chunks)
 
 _sem_struct_cache = None
 
@@ -942,13 +946,46 @@ def extract_specific_course_modules(query: str, retrieved_chunks) -> str | None:
 
     return header + "\n\n---\n\n".join(module_texts)
 
+def extract_course_module_count(query: str, retrieved_chunks=None) -> str | None:
+    from rag.outline_formatter import extract_module_outlines
+    is_counting = bool(
+        re.search(r"\b(how\s+many|how\s+much|count|total\s+number|number\s+of)\b", query, re.I)
+        and re.search(r"\bmodules?\b", query, re.I)
+    )
+    if not is_counting:
+        return None
+
+    if re.search(r"\b(experiments?|practicals?|credits?|marks?|hours?|teaching\s+scheme)\b", query, re.I) and not re.search(r"\bhow\s+many\s+modules\b", query, re.I):
+        return None
+
+    target_code = resolve_course_code_from_query(query, retrieved_chunks)
+    if not target_code:
+        return None
+
+    sections = get_sections_dict()
+    if target_code not in sections:
+        return None
+
+    sec = sections[target_code]
+    cname = extract_course_name_from_header(sec["header"])
+    outlines = extract_module_outlines(sec["pages"])
+    if not outlines:
+        return None
+
+    total_mods = len(outlines)
+    out = [f"According to the syllabus, there are {total_mods} modules in {cname} ({target_code}):\n"]
+    for o in outlines:
+        first_line = o["text"].split("\n")[0].replace("## ", "")
+        out.append(f"- {first_line}")
+    return "\n".join(out)
+
 def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
     if not retrieved_chunks:
 
         return None
 
-    if re.search(r"\b(full\s+syllabus|complete\s+syllabus|overall\s+syllabus|entire\s+syllabus|teaching\s+scheme|examination\s+scheme|exam\s+scheme|outcomes?|objectives?|credit\s+distribution|how\s+many\s+credits?)\b", query, re.I):
+    if re.search(r"\b(how\s+many|how\s+much|count|total\s+number|number\s+of|full\s+syllabus|complete\s+syllabus|overall\s+syllabus|entire\s+syllabus|teaching\s+scheme|examination\s+scheme|exam\s+scheme|outcomes?|objectives?|credit\s+distribution|how\s+many\s+credits?)\b", query, re.I):
 
         return None
 
@@ -1426,7 +1463,13 @@ ACRONYM_TO_COURSE_CODE = {
 
     "AMRD": "FEC105", "AMRD LAB": "FEL104",
 
-    "EW1": "FEL105", "WORKSHOP 1": "FEL105", "HWM": "FEL106", "UHV1": "FEL107",
+    "EW1": "FEL105", "EW 1": "FEL105", "EW-1": "FEL105", "EW-I": "FEL105", "EW I": "FEL105",
+    "WORKSHOP 1": "FEL105", "WORKSHOP I": "FEL105", "WORKSHOP-1": "FEL105", "WORKSHOP-I": "FEL105",
+    "ENGINEERING WORKSHOP 1": "FEL105", "ENGINEERING WORKSHOP I": "FEL105",
+    "ENGINEERING WORKSHOP-1": "FEL105", "ENGINEERING WORKSHOP-I": "FEL105",
+    "ENGINEERING WORKSHOP - 1": "FEL105", "ENGINEERING WORKSHOP - I": "FEL105",
+    "ENGINEERING WORKSHOP -1": "FEL105", "ENGINEERING WORKSHOP -I": "FEL105",
+    "ENGINEERING WORKSHOP": "FEL105", "HWM": "FEL106", "UHV1": "FEL107",
 
     # FE Sem 2
 
@@ -1444,7 +1487,12 @@ ACRONYM_TO_COURSE_CODE = {
 
     "OOPM": "FEL205", "OOPM LAB": "FEL205", "OOP LAB": "FEL205",
 
-    "EW2": "FEL206", "WORKSHOP 2": "FEL206", "IKS": "FEL207",
+    "EW2": "FEL206", "EW 2": "FEL206", "EW-2": "FEL206", "EW-II": "FEL206", "EW II": "FEL206",
+    "WORKSHOP 2": "FEL206", "WORKSHOP II": "FEL206", "WORKSHOP-2": "FEL206", "WORKSHOP-II": "FEL206",
+    "ENGINEERING WORKSHOP 2": "FEL206", "ENGINEERING WORKSHOP II": "FEL206",
+    "ENGINEERING WORKSHOP-2": "FEL206", "ENGINEERING WORKSHOP-II": "FEL206",
+    "ENGINEERING WORKSHOP - 2": "FEL206", "ENGINEERING WORKSHOP - II": "FEL206",
+    "ENGINEERING WORKSHOP -2": "FEL206", "ENGINEERING WORKSHOP -II": "FEL206", "IKS": "FEL207",
 
     # SE Sem 3
 
@@ -1552,17 +1600,31 @@ def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | N
             target = ACRONYM_TO_COURSE_CODE[acr]
             if target in sections:
                 return target
-    # 3. Search course name in sections
-    q_low = query.lower()
+    # 3. Search course name in sections with robust token normalization
+    def _normalize_tokens(s: str) -> str:
+        s = s.lower()
+        s = re.sub(r"\(.*?\)", "", s)
+        s = re.sub(r"[-_/\s]+", " ", s)
+        s = re.sub(r"\bviii\b", "8", s)
+        s = re.sub(r"\bvii\b", "7", s)
+        s = re.sub(r"\bvi\b", "6", s)
+        s = re.sub(r"\bv\b", "5", s)
+        s = re.sub(r"\biv\b", "4", s)
+        s = re.sub(r"\biii\b", "3", s)
+        s = re.sub(r"\bii\b", "2", s)
+        s = re.sub(r"\bi\b", "1", s)
+        return " ".join(s.split())
+
+    q_norm = _normalize_tokens(query)
     best = None
     best_len = 0
     for code, sec in sections.items():
-        cname = extract_course_name_from_header(sec["header"]).lower()
-        cname_clean = re.sub(r"\(.*\)", "", cname).strip()
-        if len(cname_clean) > 4 and cname_clean in q_low:
-            if len(cname_clean) > best_len:
+        cname = extract_course_name_from_header(sec["header"])
+        cname_norm = _normalize_tokens(cname)
+        if len(cname_norm) > 4 and cname_norm in q_norm:
+            if len(cname_norm) > best_len:
                 best = code
-                best_len = len(cname_clean)
+                best_len = len(cname_norm)
     if best:
         return best
     # 4. Fallback to retrieved chunks metadata
@@ -1597,7 +1659,7 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d+(?:\.\d+)?(?:[*+#&]?\s*\+?\s*[*+#&]?\s*\d+(?:\.\d+)?)?[*+#&]?|\-{1,2})(?=\s|$)", sub_block)
 
         if len(nums) >= 6:
 
@@ -1639,7 +1701,7 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
         sub_block = block[header_end.end():] if header_end else block
 
-        nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+        nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d{1,3}|\-{1,2})(?=\s|$)", sub_block)
 
         if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
 
@@ -1795,23 +1857,23 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
     res_lines = []
 
-    res_lines.append(f"**Course Code:** {target_code}  ")
+    res_lines.append(f"- **Course Code:** {target_code}")
 
-    res_lines.append(f"**Course Name:** {course_name}  ")
+    res_lines.append(f"- **Course Name:** {course_name}")
 
     if teaching_scheme:
 
-        res_lines.append(f"**Teaching Scheme:** {teaching_scheme}  ")
+        res_lines.append(f"- **Teaching Scheme:** {teaching_scheme}")
 
     if credits_assigned:
 
-        res_lines.append(f"**Credits Assigned:** {credits_assigned}  ")
+        res_lines.append(f"- **Credits Assigned:** {credits_assigned}")
 
     if exam_scheme:
 
-        res_lines.append(f"**Examination Scheme:** {exam_scheme}  ")
+        res_lines.append(f"- **Examination Scheme:** {exam_scheme}")
 
-    res_lines.append(f"**Pre-requisite:** {prereq}\n")
+    res_lines.append(f"- **Pre-requisite:** {prereq}\n")
 
     if pos:
 
@@ -2119,7 +2181,7 @@ def extract_end_semester_examination_pattern(query: str, retrieved_chunks) -> st
 
             sub_block = block[header_end.end():] if header_end else block
 
-            nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+            nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d{1,3}|\-{1,2})(?=\s|$)", sub_block)
 
             if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
 
@@ -2415,7 +2477,7 @@ def extract_course_assessment_and_evaluation(query: str, retrieved_chunks) -> st
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d+(?:\.\d+)?(?:[*+#&]?\s*\+?\s*[*+#&]?\s*\d+(?:\.\d+)?)?[*+#&]?|\-{1,2})(?=\s|$)", sub_block)
 
         if len(nums) >= 6:
 
@@ -2685,7 +2747,7 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
 
         sub_block = block[header_match.end():] if header_match else block
 
-        nums = re.findall(r"(\d+(?:\.\d+)?(?:\*?\+?\s*\d+)?|\-{1,2})", sub_block)
+        nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d+(?:\.\d+)?(?:[*+#&]?\s*\+?\s*[*+#&]?\s*\d+(?:\.\d+)?)?[*+#&]?|\-{1,2})(?=\s|$)", sub_block)
 
         if len(nums) >= 6:
 
@@ -2727,7 +2789,7 @@ def extract_course_scheme_or_credits(query: str, retrieved_chunks) -> str | None
 
         sub_block = block[header_end.end():] if header_end else block
 
-        nums = re.findall(r"(\d{2,3}|\-{1,2})", sub_block)
+        nums = re.findall(r"(?:(?<=\s)|(?<=^))(\d{1,3}|\-{1,2})(?=\s|$)", sub_block)
 
         if len(nums) == 4 and nums[0].isdigit() and nums[1].isdigit() and nums[2].isdigit():
 
@@ -2882,6 +2944,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     fast_detailed_sem = extract_semester_detailed_syllabus(check_query, retrieved_chunks)
     if fast_detailed_sem:
         return early_return(fast_detailed_sem)
+
+    fast_module_count = extract_course_module_count(check_query, retrieved_chunks)
+    if fast_module_count:
+        return early_return(fast_module_count)
 
     # Fast deterministic extractors (0.005s execution)
 
