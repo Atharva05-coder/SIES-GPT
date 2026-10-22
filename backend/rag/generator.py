@@ -1309,7 +1309,7 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
 
     return None
 
-def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
+def extract_lab_experiments(query: str, retrieved_chunks, course_code: str | None = None, course_name: str | None = None) -> str | None:
 
     if not re.search(r"\b(experiments?|practicals?|tasks?|lab experiments?|exps?|exp\.?|pracs?|prac\.?)\b", query, re.IGNORECASE):
 
@@ -1423,6 +1423,19 @@ def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
 
         return None
 
+    if not course_code and retrieved_chunks:
+        for item in retrieved_chunks:
+            meta = item.get("metadata", {})
+            if meta.get("course_code"):
+                course_code = meta["course_code"]
+                break
+    if course_code and not course_name:
+        sections = get_sections_dict()
+        if course_code in sections:
+            course_name = extract_course_name_from_header(sections[course_code]["header"])
+
+    header_prefix = f"### {course_code}: {course_name}\n\n" if (course_code and course_name) else ""
+
     is_counting = bool(re.search(r"\b(how many|how much|count|total number|number of)\b", query, re.IGNORECASE))
 
     if is_counting:
@@ -1431,9 +1444,9 @@ def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
 
         if at_least_count:
 
-            return f"According to the syllabus, students are required to complete at least {at_least_count} experiments from the {total_listed} listed experiments for this lab."
+            return f"{header_prefix}According to the syllabus, students are required to complete at least {at_least_count} experiments from the {total_listed} listed experiments for this lab."
 
-        return f"According to the syllabus, there are {total_listed} experiments listed for this lab."
+        return f"{header_prefix}According to the syllabus, there are {total_listed} experiments listed for this lab."
 
     avail_keys = sorted(all_experiments.keys())
 
@@ -1519,7 +1532,7 @@ def extract_lab_experiments(query: str, retrieved_chunks) -> str | None:
 
         intro = "Here are the experiments from the syllabus:\n\n"
 
-    return intro + "\n\n".join(exp_blocks)
+    return header_prefix + intro + "\n\n".join(exp_blocks)
 
 _sections_cache = None
 
@@ -1800,6 +1813,153 @@ def resolve_all_course_codes_from_query(query: str, retrieved_chunks=None) -> li
 def resolve_course_code_from_query(query: str, retrieved_chunks=None) -> str | None:
     codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
     return codes[0] if codes else None
+
+THEORY_TO_LAB_MAP = {
+    'CEC503': 'CEL502',      # Computer Network -> Computer Network Lab
+    'CEC402': 'CEL401',      # Operating System -> Operating System Lab
+    'CEC403': 'CEL402',      # Analysis of Algorithm -> Analysis of Algorithm Lab
+    'CEC302': 'CEL301',      # Data Structures -> Data Structure Lab
+    'CEC304': 'CEL302',      # DBMS -> DBMS Lab
+    'CEC305': 'CEL303',      # COA -> COA Lab
+    'CEPEC5011': 'CEPEL5011', # Advance DBMS -> Advance DBMS Lab
+    'CEPEC5012': 'CEPEL5012', # IoT -> IoT Lab
+    'CEPEC5013': 'CEPEL5013', # Ethical Hacking -> Ethical Hacking Lab
+    'CEPEC5014': 'CEPEL5014', # Data Warehouse and Mining -> Data Warehouse and Mining Lab
+    'CEPEC6011': 'CEPEL6011', # Machine Vision -> Machine Vision Lab
+    'CEPEC6012': 'CEPEL6012', # Robotics and Applications -> Robotics and Applications Lab
+    'CEPEC6013': 'CEPEL6013', # Digital Forensics -> Digital Forensics Lab
+    'CEPEC6014': 'CEPEL6014', # NLP -> NLP Lab
+    'FEC1021': 'FEL1011',    # Applied Physics I -> Applied Physics Lab
+    'FEC2021': 'FEL2011',    # Applied Physics II -> Applied Physics Lab
+    'FEC1022': 'FEL1012',    # Applied Chemistry I -> Applied Chemistry Lab
+    'FEC2022': 'FEL2012',    # Applied Chemistry II -> Applied Chemistry Lab
+    'FEC103': 'FEL102',      # BEEE -> BEEE Lab
+    'FEC104': 'FEL103',      # C - Programming -> C - Programming Lab
+    'FEC105': 'FEL104',      # AMRD -> AMRD Lab
+    'FEC203': 'FEL202',      # Engineering Graphics -> Engineering Graphics Lab
+    'FEC204': 'FEL203',      # Digital System Design -> Digital System Design Lab
+    'FEC205': 'FEL204',      # PCT -> PCT Lab
+    'MDMC5022': 'MDML5021',  # Data Analytics & Visualization -> DAV Lab
+    'MDMC5032': 'MDML5031',  # Embedded Systems & RTOS -> ESR Lab
+    'MDMC6033': 'MDML6032',  # Sensor Technology -> Sensor Technology Lab
+}
+
+def extract_academic_query_dispatch(query: str, retrieved_chunks=None) -> str | None:
+    has_exp_kw = bool(re.search(r'\b(experiments?|practicals?|tasks?|pracs?|exps?|lab experiments?)\b', query, re.I))
+    has_mod_kw = bool(re.search(r'\b(modules?|units?)\b', query, re.I))
+    
+    if not (has_exp_kw or has_mod_kw):
+        return None
+
+    if re.search(r'\b(program structure|curriculum structure|teaching scheme|all subjects|all courses|credit distribution|total credits?)\b', query, re.I):
+        return None
+
+    # If pure module query without experiments, only intercept if there are multiple courses with specific module numbers (e.g. "CN module 2 and TCS module 4")
+    if not has_exp_kw and has_mod_kw:
+        if not re.search(r'(\d+|unit\s*\d+\.\d+)', query, re.I):
+            return None
+
+    all_codes = resolve_all_course_codes_from_query(query, retrieved_chunks)
+    if not all_codes:
+        return None
+
+    sections = get_sections_dict()
+
+    # Split query into clauses by conjunctions, coordinators, or punctuation
+    raw_clauses = [c.strip() for c in re.split(r'\s*(?:and\s+also|as\s+well\s+as|along\s+with|\band\b|[,;&])\s*', query, flags=re.I) if c.strip()]
+    
+    # If there are multiple courses but conjunction splitting did not create multiple clauses, split by course positions
+    if len(all_codes) > 1 and len(raw_clauses) < len(all_codes):
+        q_lower = query.lower()
+        pos_list = []
+        for c in all_codes:
+            if c not in sections:
+                continue
+            cname = extract_course_name_from_header(sections[c]['header']).lower()
+            p = q_lower.find(c.lower())
+            if p == -1:
+                for acr, target in ACRONYM_TO_COURSE_CODE.items():
+                    if target == c:
+                        p_acr = q_lower.find(acr.lower())
+                        if p_acr != -1:
+                            p = p_acr
+                            break
+            if p == -1:
+                p = q_lower.find(cname)
+            if p != -1:
+                pos_list.append((p, c))
+        pos_list.sort(key=lambda x: x[0])
+        if len(pos_list) == len(all_codes):
+            new_clauses = []
+            for i in range(len(pos_list)):
+                start_p = pos_list[i][0]
+                end_p = pos_list[i+1][0] if i + 1 < len(pos_list) else len(query)
+                new_clauses.append(query[start_p:end_p].strip())
+            if len(new_clauses) >= len(all_codes):
+                raw_clauses = new_clauses
+
+    course_to_clause = {}
+    for cl in raw_clauses:
+        cl_codes = resolve_all_course_codes_from_query(cl, retrieved_chunks)
+        for c in cl_codes:
+            if c not in course_to_clause:
+                course_to_clause[c] = cl
+    for c in all_codes:
+        if c not in course_to_clause:
+            course_to_clause[c] = query
+
+    results = []
+    seen_output_keys = set()
+
+    for c in all_codes:
+        if c not in sections:
+            continue
+        cl = course_to_clause.get(c, query)
+        sec = sections[c]
+        cname = extract_course_name_from_header(sec['header'])
+        is_lab = c.startswith(('FEL', 'CEL', 'CEPEL', 'MDML')) or 'lab' in cname.lower() or 'lab' in sec['header'].lower()
+
+        # If clause asks for experiments but code was resolved to theory, map to lab if possible
+        if not is_lab and (has_exp_kw and not re.search(r'\b(modules?|units?)\b', cl, re.I)):
+            lab_c = THEORY_TO_LAB_MAP.get(c)
+            if lab_c and lab_c in sections:
+                c = lab_c
+                sec = sections[c]
+                cname = extract_course_name_from_header(sec['header'])
+                is_lab = True
+
+        output_key = f"{c}_{cl}"
+        if output_key in seen_output_keys:
+            continue
+        seen_output_keys.add(output_key)
+
+        if is_lab:
+            cl_for_exp = cl
+            if not re.search(r'\b(experiments?|practicals?|tasks?|pracs?|exps?)\b', cl_for_exp, re.I):
+                cl_for_exp = cl_for_exp + " experiments"
+            if not re.search(r'(\d+|first|last|all|list|how\s+many|count|total)', cl_for_exp, re.I):
+                cl_for_exp = "all experiments"
+            
+            exp_text = extract_lab_experiments(cl_for_exp, sec['all_pages'], course_code=c, course_name=cname)
+            if exp_text:
+                results.append(exp_text.strip())
+        else:
+            # Theory course
+            cl_for_mod = cl
+            if not re.search(r'\b(modules?|units?)\b', cl_for_mod, re.I):
+                cl_for_mod = cl_for_mod + " modules"
+            if re.search(r'(\d+|unit\s*\d+\.\d+)', cl_for_mod, re.I):
+                mod_text = extract_specific_course_modules(cl_for_mod, sec['all_pages'])
+                if mod_text:
+                    results.append(mod_text.strip())
+            else:
+                mod_text = extract_course_all_modules_only(cl_for_mod, sec['all_pages'])
+                if mod_text:
+                    results.append(mod_text.strip())
+
+    if results:
+        return "\n\n---\n\n".join(results)
+    return None
 
 def build_course_full_markdown(target_code: str, section: dict, sections: dict) -> str:
 
@@ -3218,6 +3378,12 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     if fast_books:
 
         return early_return(fast_books)
+
+    fast_academic_dispatch = extract_academic_query_dispatch(check_query, retrieved_chunks)
+
+    if fast_academic_dispatch:
+
+        return early_return(fast_academic_dispatch)
 
     fast_exps = extract_lab_experiments(check_query, retrieved_chunks)
 
