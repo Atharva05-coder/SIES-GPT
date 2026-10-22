@@ -1021,9 +1021,14 @@ from agents import Runner
 _syllabus_courses_re: re.Pattern | None = None
 
 
+_syllabus_courses_re = None
+_syllabus_courses_mtimes = {}
+
 def get_syllabus_courses_regex() -> re.Pattern | None:
-    global _syllabus_courses_re
-    if _syllabus_courses_re is None:
+    global _syllabus_courses_re, _syllabus_courses_mtimes
+    from rag.retriever import DATA_DIR
+    current_mtimes = {f.name: f.stat().st_mtime for f in DATA_DIR.glob("*_structured.json")}
+    if _syllabus_courses_re is None or current_mtimes != _syllabus_courses_mtimes:
         try:
             from rag.retriever import _course_sections
             from rag.generator import extract_course_name_from_header
@@ -1044,6 +1049,7 @@ def get_syllabus_courses_regex() -> re.Pattern | None:
             if phrases:
                 pattern = r"\b(?:" + "|".join(sorted(phrases, key=len, reverse=True)) + r")\b"
                 _syllabus_courses_re = re.compile(pattern, re.IGNORECASE)
+                _syllabus_courses_mtimes = current_mtimes
         except Exception as e:
             log.warning("Could not build dynamic syllabus courses regex: %s", e)
     return _syllabus_courses_re

@@ -1695,17 +1695,15 @@ def extract_lab_experiments(query: str, retrieved_chunks, course_code: str | Non
     return header_prefix + intro + "\n\n".join(exp_blocks)
 
 _sections_cache = None
+_sections_json_mtimes = {}
 
-def get_sections_dict():
-
-    global _sections_cache
-
-    if _sections_cache is None:
-
-        from rag.retriever import _course_sections
-
+def get_sections_dict(refresh: bool = False):
+    global _sections_cache, _sections_json_mtimes
+    from rag.retriever import _course_sections, DATA_DIR
+    current_mtimes = {f.name: f.stat().st_mtime for f in DATA_DIR.glob("*_structured.json")}
+    if _sections_cache is None or refresh or current_mtimes != _sections_json_mtimes:
         _sections_cache = {s["code"]: s for s in _course_sections()}
-
+        _sections_json_mtimes = current_mtimes
     return _sections_cache
 
 def extract_course_name_from_header(header: str) -> str:
