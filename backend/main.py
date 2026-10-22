@@ -1079,6 +1079,7 @@ def get_faculty_names_regex() -> re.Pattern | None:
 
 FAST_SYLLABUS_RE = re.compile(
     r"\b(sem|semester|syllabus|curriculum|module|modules|course|courses|subject|subjects|credits?|"
+    r"mini\s*projects?|major\s*projects?|capstone\s*projects?|CEM301|CEM401|CEM501|CEP601|CEP701|CEP801|"
     r"nomenclature|course\s+nomenclature|"
     r"exam|examination|scheme|internal assessment|assessment|evaluation|term\s*work|bifurcation|distribution|"
     r"ese|ise|ciap|esep|mse|practicals?|experiments?|"
@@ -1150,8 +1151,14 @@ FAST_WEBSITE_RE = re.compile(
 
 
 def fast_classify_intent(query: str) -> str | None:
-    # 0. Nomenclature / course abbreviations in curriculum route directly to syllabus
-    if re.search(r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum)\b", query, re.I):
+    # 0. Nomenclature, course abbreviations, or mini/major projects route directly to syllabus
+    if re.search(
+        r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum|"
+        r"mini\s*projects?|major\s*projects?|capstone\s*projects?|"
+        r"CEM301|CEM401|CEM501|CEP601|CEP701|CEP801)\b",
+        query,
+        re.I,
+    ):
         return "syllabus"
     # 1. Faculty names, staff names, institutional cells, committees, faculty, HOD, campus route to website
     fac_rgx = get_faculty_names_regex()
@@ -1224,17 +1231,26 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
             )
         except asyncio.TimeoutError:
             log.warning("Intent classification timed out after 3.5s, using fast heuristic fallback")
-            fac_rgx = get_faculty_names_regex()
-            if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
-                intent = "website"
-            elif FAST_DOCUMENT_RE.search(last_message):
-                intent = "document"
+            if re.search(
+                r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum|"
+                r"mini\s*projects?|major\s*projects?|capstone\s*projects?|"
+                r"CEM301|CEM401|CEM501|CEP601|CEP701|CEP801)\b",
+                last_message,
+                re.I,
+            ):
+                intent = "syllabus"
             else:
-                crgx = get_syllabus_courses_regex()
-                if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
-                    intent = "syllabus"
-                else:
+                fac_rgx = get_faculty_names_regex()
+                if (fac_rgx and fac_rgx.search(last_message)) or FAST_WEBSITE_RE.search(last_message):
                     intent = "website"
+                elif FAST_DOCUMENT_RE.search(last_message):
+                    intent = "document"
+                else:
+                    crgx = get_syllabus_courses_regex()
+                    if (crgx and crgx.search(last_message)) or FAST_SYLLABUS_RE.search(last_message):
+                        intent = "syllabus"
+                    else:
+                        intent = "website"
         except Exception as e:
             if (req_id and req_id in CANCELLED_REQUESTS) or (request is not None and await request.is_disconnected()):
                 log.info("Cancelled during intent classification for req_id: %s", req_id)
@@ -1244,7 +1260,13 @@ async def smart_chat(req: ChatRequest, request: Request) -> StreamingResponse:
                     headers=SSE_HEADERS,
                 )
             log.error(f"Intent classifier failed: {e}")
-            if re.search(r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum)\b", last_message, re.I):
+            if re.search(
+                r"\b(nomenclature|course\s+nomenclature|abbreviations?\s+in\s+(?:the\s+)?curriculum|"
+                r"mini\s*projects?|major\s*projects?|capstone\s*projects?|"
+                r"CEM301|CEM401|CEM501|CEP601|CEP701|CEP801)\b",
+                last_message,
+                re.I,
+            ):
                 intent = "syllabus"
             else:
                 fac_rgx = get_faculty_names_regex()

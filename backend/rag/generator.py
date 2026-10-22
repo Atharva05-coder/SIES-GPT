@@ -262,41 +262,201 @@ def extract_special_academic_queries(query: str, retrieved_chunks=None) -> str |
                 return f"{pe3}\n\n---\n\n{pe4}\n\n---\n\n{oe1}"
 
     # 5. Projects (Mini Project & Major Project)
-    m_proj = re.search(r'\b(mini\s*project\s*(?:1a|1b|2|1|i|ii)?|major\s*project\s*(?:1|2|3|i|ii|iii)?|capstone\s*project|CEM301|CEM401|CEM501|CEP601|CEP701|CEP801)\b', q, re.I)
+    m_proj = re.search(r'\b(mini\s*projects?|major\s*projects?|capstone\s*projects?|CEM301|CEM401|CEM501|CEP601|CEP701|CEP801)\b', q, re.I)
     if m_proj:
-        target_code = None
+        sections = get_sections_dict()
         qp = q.upper()
-        if '1A' in qp or 'CEM301' in qp: target_code = 'CEM301'
-        elif '1B' in qp or 'CEM401' in qp: target_code = 'CEM401'
-        elif 'MINI PROJECT 2' in qp or 'CEM501' in qp: target_code = 'CEM501'
-        elif 'MAJOR PROJECT 1' in qp or 'MAJOR PROJECT I' in qp or 'CEP601' in qp: target_code = 'CEP601'
-        elif 'MAJOR PROJECT 2' in qp or 'MAJOR PROJECT II' in qp or 'CEP701' in qp: target_code = 'CEP701'
-        elif 'MAJOR PROJECT 3' in qp or 'MAJOR PROJECT III' in qp or 'CEP801' in qp: target_code = 'CEP801'
-        
-        if target_code and target_code in PROJECTS:
-            p = PROJECTS[target_code]
-            out = [f"### {target_code}: {p[0]} ({p[1]})\n"]
-            out.append(f"- **Course Category:** {p[5]}")
-            out.append(f"- **Teaching Scheme:** {p[3]}")
-            out.append(f"- **Credits Assigned:** {p[2]}")
-            out.append(f"- **Examination Scheme:** {p[4]}")
-            out.append(f"- **Course Overview & Scope:** {p[6]}")
+
+        # Specific sub-aspect flags
+        wants_team = bool(re.search(r'\b(teams?|groups?|team\s*size|group\s*size|how\s+many\s+students|number\s+of\s+students)\b', q, re.I))
+        wants_deploy = bool(re.search(r'\b(deployment|hosting|cloud|deploy|prototype)\b', q, re.I))
+        wants_obj = bool(re.search(r'\b(objectives?|aims?)\b', q, re.I))
+        wants_out = bool(re.search(r'\b(outcomes?|cos?\b)\b', q, re.I))
+        wants_guide = bool(re.search(r'\b(guidelines?|rules?|instructions?|steps?|process|procedure|selection|topic|topics?)\b', q, re.I))
+        wants_eval = bool(re.search(r'\b(evaluat\w*|assess\w*|marking|marks?|grading|rubrics?|ciap|esep|distribution|term\s*work|presentation|viva|oral)\b', q, re.I))
+
+        # Identify target code(s)
+        target_codes = []
+        if '1A' in qp or 'CEM301' in qp:
+            target_codes = ['CEM301']
+        elif '1B' in qp or 'CEM401' in qp:
+            target_codes = ['CEM401']
+        elif 'MINI PROJECT 2' in qp or 'CEM501' in qp or re.search(r'\bmini\s*project\s*(?:2|ii)\b', q, re.I):
+            target_codes = ['CEM501']
+        elif 'MAJOR PROJECT 1' in qp or 'MAJOR PROJECT I' in qp or 'CEP601' in qp or re.search(r'\bmajor\s*project\s*(?:1|i)\b', q, re.I):
+            target_codes = ['CEP601']
+        elif 'MAJOR PROJECT 2' in qp or 'MAJOR PROJECT II' in qp or 'CEP701' in qp or re.search(r'\bmajor\s*project\s*(?:2|ii)\b', q, re.I):
+            target_codes = ['CEP701']
+        elif 'MAJOR PROJECT 3' in qp or 'MAJOR PROJECT III' in qp or 'CEP801' in qp or re.search(r'\bmajor\s*project\s*(?:3|iii)\b', q, re.I):
+            target_codes = ['CEP801']
+        elif re.search(r'\bmini\s*project\s*(?:1|i)\b', q, re.I):
+            # Mini Project 1 spans both Semester III (1A) and Semester IV (1B)
+            target_codes = ['CEM301', 'CEM401']
+
+        def clean_project_text(code):
+            sec = sections.get(code)
+            if not sec:
+                return ''
+            cleaned_pages = []
+            for p in sec.get('all_pages', []):
+                t = p.get('text', '')
+                t = re.sub(r'^\s*\d+\s*\n\s*SIES\s+Graduate\s+School\s+of\s+Technology\s*\n\s*Department\s+of\s+Computer\s+Engineering\s*\n\s*Bachelor\s+of\s+(?:Engineering|Technology)\s*\n?', '', t, flags=re.I)
+                cleaned_pages.append(t.strip())
+            return '\n\n'.join(cleaned_pages)
+
+        def render_single_project(code):
+            p = PROJECTS.get(code)
+            if not p:
+                return ''
+            txt = clean_project_text(code)
+            if not txt:
+                # Metadata fallback for CEP701 / CEP801
+                out = [f"### {code}: {p[0]} ({p[1]})\n"]
+                out.append(f"- **Course Category:** {p[5]}")
+                out.append(f"- **Credits Assigned:** {p[2]}")
+                out.append(f"- **Teaching Scheme:** {p[3]}")
+                out.append(f"- **Examination Scheme:** {p[4]}")
+                out.append(f"- **Scope & Role:** {p[6]}")
+                return '\n'.join(out)
+
+            m_obj = re.search(r'(?im)^\s*(?:Course\s+Objectives?|Project\s+Objectives?|Objectives)\b:?\s*(?:The course aims to enable students:?)?\s*\n?(.*?)(?=^\s*(?:Course\s+Outcomes?|Project\s+Outcomes?|Outcomes?)\b|\Z)', txt, flags=re.S)
+            m_out = re.search(r'(?im)^\s*(?:Course\s+Outcomes?|Project\s+Outcomes?|Outcomes?)\b:?\s*(?:Upon completion[^\n]*\n?)?(.*?)(?=^\s*(?:\d+\.?\s*)?Guidelines\b|\Z)', txt, flags=re.S)
+            m_guide = re.search(r'(?im)^\s*(?:\d+\.?\s*)?Guidelines\s+for\s+(?:Mini\s+Project|Project\s+topic\s+selection).*?\n?(.*?)(?=^\s*(?:\d+\.?\s*)?Guidelines\s+for\s+Assessment|^\s*Assessment\s+and\s+Evaluation|\Z)', txt, flags=re.S)
+            m_assess = re.search(r'(?im)^\s*(?:(?:\d+\.?\s*)?Guidelines\s+for\s+Assessment.*|Assessment\s+and\s+Evaluation\s+Scheme.*)\n?(.*?)(?=\Z)', txt, flags=re.S)
+
+            obj_txt = m_obj.group(1).strip() if m_obj else ''
+            out_txt = m_out.group(1).strip() if m_out else ''
+            guide_txt = m_guide.group(0).strip() if m_guide else ''
+            assess_txt = m_assess.group(0).strip() if m_assess else ''
+
+            if wants_team:
+                if code.startswith('CEP'):
+                    return (
+                        f"### {code}: {p[0]} - Group / Team Size Guidelines\n\n"
+                        f"- **Team Formation:** Project work must be carried out by a group of **at least 2 students and a maximum of 4 students**.\n"
+                        f"- The Capstone Project problems must be related to the programme or may be interdisciplinary, based on the industry expected outcomes.\n"
+                        f"- Project work can be undertaken in a research institute, organization, industry, or business establishment (out-house projects)."
+                    )
+                else:
+                    return (
+                        f"### {code}: {p[0]} - Group / Team Size Guidelines\n\n"
+                        f"- **Team Formation:** Students shall form a group of **3 to 4 students**.\n"
+                        f"- Forming a group with less than three or more than four students is **not allowed**, as it is a group activity.\n"
+                        f"- Each group identifies needs, submits Gantt/PERT charts, maintains a weekly logbook, and demonstrates a working prototype."
+                    )
+            if wants_deploy:
+                if code.startswith('CEP'):
+                    m_dep = re.search(r'(?is)(?:Deployment\s+Requirement.*?)(?=\n\s*(?:Guidelines\s+for\s+Assessment|\d+\.|\Z))', guide_txt)
+                    dep_text = m_dep.group(0).strip() if m_dep else (
+                        "Each project must include a deployment phase, ensuring the solution is usable in a real-world or simulated environment.\n"
+                        "Examples of deployment include:\n"
+                        "- Web application hosted on cloud/server\n"
+                        "- Mobile application (APK/Test version/Play Store)\n"
+                        "- Industrial automation system implemented or simulated\n"
+                        "- AI/ML model deployed via API or dashboard\n"
+                        "- IoT system with real-time monitoring and control"
+                    )
+                    return f"### {code}: {p[0]} - Deployment Requirement\n\n{dep_text}"
+                else:
+                    return (
+                        f"### {code}: {p[0]} - Working Model & Demonstration Requirement\n\n"
+                        f"- Students shall convert the best solution into a **working model** using various components of their domain areas and demonstrate.\n"
+                        f"- The solution must be validated with proper justification and compiled in the standard institute report format."
+                    )
+            if wants_eval and not (wants_obj or wants_out or wants_guide):
+                return f"### {code}: {p[0]} ({p[1]}) - Assessment & Evaluation Scheme\n\n- **Examination Scheme:** {p[4]}\n\n{assess_txt}"
+            if wants_guide and not (wants_obj or wants_out or wants_eval):
+                return f"### {code}: {p[0]} ({p[1]}) - Project Guidelines & Execution\n\n{guide_txt}"
+            if (wants_obj or wants_out) and not (wants_guide or wants_eval):
+                parts = [f"### {code}: {p[0]} ({p[1]})"]
+                if wants_obj and obj_txt:
+                    parts.append(f"#### Course / Project Objectives\n{obj_txt}")
+                if wants_out and out_txt:
+                    parts.append(f"#### Course / Project Outcomes\n{out_txt}")
+                return "\n\n".join(parts)
+
+            # Default: Full Comprehensive Information
+            full_parts = [
+                f"### {code}: {p[0]} ({p[1]})\n",
+                f"- **Course Category:** {p[5]}",
+                f"- **Credits Assigned:** {p[2]}",
+                f"- **Teaching Scheme:** {p[3]}",
+                f"- **Examination Scheme:** {p[4]}",
+                f"- **Scope & Role:** {p[6]}\n",
+            ]
+            if obj_txt:
+                full_parts.append(f"#### Course / Project Objectives\n{obj_txt}\n")
+            if out_txt:
+                full_parts.append(f"#### Course / Project Outcomes\n{out_txt}\n")
+            if guide_txt:
+                full_parts.append(f"#### Project Guidelines & Execution\n{guide_txt}\n")
+            if assess_txt:
+                full_parts.append(f"#### Assessment & Evaluation Scheme\n{assess_txt}")
+
+            return "\n".join(full_parts)
+
+        if target_codes:
+            rendered = [render_single_project(c) for c in target_codes if c in PROJECTS]
+            if rendered:
+                return '\n\n---\n\n'.join(rendered)
+
+        # General Major Project query
+        if re.search(r'\b(major\s*projects?|capstone\s*projects?)\b', q, re.I):
+            if wants_team:
+                return (
+                    "### Major Project Group / Team Size Guidelines\n\n"
+                    "- **Team Formation:** Project work must be carried out by a group of **at least 2 students and a maximum of 4 students**.\n"
+                    "- The Capstone Project problems must be related to the programme or may be interdisciplinary, based on industry expected outcomes.\n"
+                    "- Projects can be undertaken in a research institute, organization, industry, or business establishment (out-house projects)."
+                )
+            if wants_deploy:
+                return (
+                    "### Major Project Deployment Requirement\n\n"
+                    "Each project must include a deployment phase, ensuring the solution is usable in a real-world or simulated environment.\n\n"
+                    "**Examples of deployment include:**\n"
+                    "- **Web application:** Hosted on cloud/server\n"
+                    "- **Mobile application:** APK / Test version / Google Play Store\n"
+                    "- **Industrial automation system:** Implemented or simulated\n"
+                    "- **AI/ML model:** Deployed via API endpoint or interactive dashboard\n"
+                    "- **IoT system:** Real-time monitoring and control setup"
+                )
+            if wants_eval and not wants_guide:
+                return render_single_project('CEP601')
+            if wants_guide and not wants_eval:
+                return render_single_project('CEP601')
+
+            out = ["### Overview of Major Projects (Final Year Capstone Project Track)\n"]
+            out.append('| Course Code | Project Title | Semester | Credits | Teaching Scheme | Evaluation |')
+            out.append('|---|---|:---:|:---:|---|---|')
+            for c in ['CEP601', 'CEP701', 'CEP801']:
+                p = PROJECTS[c]
+                out.append(f"| {c} | {p[0]} | {p[1]} | {p[2]} | {p[3]} | {p[4]} |")
+            out.append('\n\n---\n\n')
+            out.append(render_single_project('CEP601'))
             return '\n'.join(out)
-        elif re.search(r'\bmini\s*projects?\b', q, re.I):
+
+        # General Mini Project query
+        if re.search(r'\bmini\s*projects?\b', q, re.I):
+            if wants_team:
+                return (
+                    "### Mini Project Group / Team Size Guidelines\n\n"
+                    "- **Team Formation:** Students shall form a group of **3 to 4 students**.\n"
+                    "- Forming a group with less than three or more than four students is **not allowed**, as it is a group activity.\n"
+                    "- Each group identifies needs, submits Gantt/PERT charts, maintains a weekly logbook, and demonstrates a working prototype."
+                )
+            if wants_eval and not wants_guide:
+                return render_single_project('CEM301')
+            if wants_guide and not wants_eval:
+                return render_single_project('CEM301')
+
             out = ["### Overview of Mini Projects (Computer Engineering Curriculum)\n"]
             out.append('| Course Code | Project Title | Semester | Credits | Teaching Scheme | Evaluation |')
             out.append('|---|---|:---:|:---:|---|---|')
             for c in ['CEM301', 'CEM401', 'CEM501']:
                 p = PROJECTS[c]
                 out.append(f"| {c} | {p[0]} | {p[1]} | {p[2]} | {p[3]} | {p[4]} |")
-            return '\n'.join(out)
-        elif re.search(r'\bmajor\s*projects?\b', q, re.I):
-            out = ["### Overview of Major Projects (Final Year Capstone Project)\n"]
-            out.append('| Course Code | Project Title | Semester | Credits | Teaching Scheme | Evaluation |')
-            out.append('|---|---|:---:|:---:|---|---|')
-            for c in ['CEP601', 'CEP701', 'CEP801']:
-                p = PROJECTS[c]
-                out.append(f"| {c} | {p[0]} | {p[1]} | {p[2]} | {p[3]} | {p[4]} |")
+            out.append('\n\n---\n\n')
+            out.append(render_single_project('CEM301'))
             return '\n'.join(out)
 
     # 6. HWM (Health, Wellness and Mindfulness)
@@ -1079,7 +1239,7 @@ def extract_course_module_count(query: str, retrieved_chunks=None) -> str | None
 
     if not blocks:
         return None
-    return "\n\n==============================\n\n".join(blocks)
+    return "\n\n---\n\n".join(blocks)
 
 def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
@@ -1137,7 +1297,7 @@ def extract_course_all_modules_only(query: str, retrieved_chunks) -> str | None:
 
         return None
 
-    return "\n\n==============================\n\n".join(results)
+    return "\n\n---\n\n".join(results)
 
 def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None:
 
@@ -2373,7 +2533,7 @@ def extract_course_full_information(query: str, retrieved_chunks) -> str | None:
                 seen_titles.add(clean_title)
                 multi_parts.append(build_course_full_markdown(code, sections[code], sections))
         if multi_parts:
-            return "\n\n==============================\n\n".join(multi_parts)
+            return "\n\n---\n\n".join(multi_parts)
         return None
 
     target_code = target_codes[0]
