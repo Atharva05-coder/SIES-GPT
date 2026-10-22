@@ -1469,9 +1469,9 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
 
     return None
 
-def extract_course_assignments_or_activities(query: str, retrieved_chunks=None) -> str | None:
+def extract_course_assignments_or_activities(query: str, retrieved_chunks=None, course_code: str | None = None) -> str | None:
     sections = get_sections_dict()
-    code = resolve_course_code_from_query(query, retrieved_chunks)
+    code = course_code or resolve_course_code_from_query(query, retrieved_chunks)
     if not code or code not in sections:
         return None
 
@@ -2489,8 +2489,8 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
             res_lines.append(f"### Suggested List of Experiments\n\n{clean_exps}\n")
 
         else:
-            asg_act = extract_course_assignments_or_activities("activities", section["all_pages"])
-            asg_list = extract_course_assignments_or_activities("assignments", section["all_pages"])
+            asg_act = extract_course_assignments_or_activities("activities", section["all_pages"], course_code=target_code)
+            asg_list = extract_course_assignments_or_activities("assignments", section["all_pages"], course_code=target_code)
             if asg_act or asg_list:
                 if asg_act:
                     res_lines.append(asg_act + "\n")
@@ -2498,16 +2498,11 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
                     res_lines.append(asg_list + "\n")
             else:
                 outlines = section.get("module_outlines", [])
-
-            if outlines:
-
-                res_lines.append("### Course Modules\n")
-
-                for m in outlines:
-
-                    res_lines.append(format_self_learning_text(m.get("text", "")))
-
-                    res_lines.append("")
+                if outlines:
+                    res_lines.append("### Course Modules\n")
+                    for m in outlines:
+                        res_lines.append(format_self_learning_text(m.get("text", "")))
+                        res_lines.append("")
 
     else:
 
