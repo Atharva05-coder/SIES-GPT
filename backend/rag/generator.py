@@ -1709,7 +1709,22 @@ ACRONYM_TO_COURSE_CODE = {
 
 }
 
+def _ensure_lab_acronyms():
+    sections = get_sections_dict()
+    for code, sec in sections.items():
+        cname = extract_course_name_from_header(sec["header"]).upper().strip()
+        if "LAB" in cname:
+            if cname not in ACRONYM_TO_COURSE_CODE:
+                ACRONYM_TO_COURSE_CODE[cname] = code
+            cname_clean = re.sub(r"\s*-\s*", " ", cname).strip()
+            if cname_clean not in ACRONYM_TO_COURSE_CODE:
+                ACRONYM_TO_COURSE_CODE[cname_clean] = code
+            cname_noskill = re.sub(r"^SKILL\s+LAB\s*", "", cname_clean).strip()
+            if cname_noskill and cname_noskill not in ACRONYM_TO_COURSE_CODE:
+                ACRONYM_TO_COURSE_CODE[cname_noskill] = code
+
 def resolve_all_course_codes_from_query(query: str, retrieved_chunks=None) -> list[str]:
+    _ensure_lab_acronyms()
     sections = get_sections_dict()
     matches: list[tuple[int, int, str]] = []  # (start, end, code)
     q_upper = query.upper()
@@ -1928,10 +1943,9 @@ def extract_academic_query_dispatch(query: str, retrieved_chunks=None) -> str | 
                 cname = extract_course_name_from_header(sec['header'])
                 is_lab = True
 
-        output_key = f"{c}_{cl}"
-        if output_key in seen_output_keys:
+        if c in seen_output_keys:
             continue
-        seen_output_keys.add(output_key)
+        seen_output_keys.add(c)
 
         if is_lab:
             cl_for_exp = cl
