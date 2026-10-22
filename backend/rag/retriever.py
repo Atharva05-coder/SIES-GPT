@@ -556,7 +556,7 @@ def _retrieve_semester_structures(question: str) -> list[dict] | None:
 
         return None
 
-
+    requested = _requested_semesters(question)
     if not requested:
 
         return None
