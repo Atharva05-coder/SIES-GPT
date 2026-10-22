@@ -280,9 +280,9 @@ def extract_page_repr(
                 course_lines.append("- " + s.replace("; Material URL: View Material", "").replace("Course Title:", "").strip())
             elif s.startswith("Date:"):
                 if any(w in s for w in ["Type: Journal", "Type: Proceedings", "Type: Book", "Type: Conference", "Level: National", "Level: International"]):
-                    pub_lines.append("- " + s)
+                    pub_lines.append(s)
                 else:
-                    dev_lines.append("- " + s)
+                    dev_lines.append(s)
             elif "Type: " in s and any(k in s for k in ["Badge", "Certificate", "Award", "Academic Year:", "Co-curricular"]):
                 if "Details:" in s:
                     parts_dict = dict(p.strip().split(": ", 1) for p in s.split(";") if ": " in p)
@@ -297,6 +297,46 @@ def extract_page_repr(
                 if not exp_lines and not pub_lines and not dev_lines and not course_lines and not award_lines:
                     bio_lines.append(s)
 
+        def _format_pub_table(raw_lines: list[str]) -> str:
+            rows = [
+                "| Title | Type | Level | Academic Year | Date |",
+                "|---|:---:|:---:|:---:|:---:|",
+            ]
+            for line in raw_lines:
+                clean_l = line.replace("Ã¢â¬â", "-").replace("Â", "").strip()
+                if ": " in clean_l and ";" in clean_l:
+                    parts_dict = dict(p.strip().split(": ", 1) for p in clean_l.split(";") if ": " in p)
+                    title = parts_dict.get("Title", "").replace("|", "-")
+                    ptype = parts_dict.get("Type", "").replace("|", "-")
+                    level = parts_dict.get("Level", "").replace("|", "-")
+                    ay = parts_dict.get("Academic Year", "").replace("|", "-")
+                    date = parts_dict.get("Date", "").replace("|", "-")
+                    rows.append(f"| {title} | {ptype} | {level} | {ay} | {date} |")
+                else:
+                    rows.append(f"| {clean_l.replace('|', '-')} | - | - | - | - |")
+            return "\n".join(rows)
+
+        def _format_dev_table(raw_lines: list[str]) -> str:
+            rows = [
+                "| Program / Workshop Title | Type | Role / Level | Venue | Date |",
+                "|---|:---:|:---:|---|:---:|",
+            ]
+            for line in raw_lines:
+                clean_l = line.replace("Ã¢â¬â", "-").replace("Â", "").strip()
+                if ": " in clean_l and ";" in clean_l:
+                    parts_dict = dict(p.strip().split(": ", 1) for p in clean_l.split(";") if ": " in p)
+                    title = parts_dict.get("Title", "").replace("|", "-")
+                    ptype = parts_dict.get("Type", "").replace("|", "-")
+                    role = parts_dict.get("Role", "").replace("|", "-")
+                    lvl = parts_dict.get("Level", "").replace("|", "-")
+                    role_lvl = f"{role} ({lvl})" if (role and lvl) else (role or lvl or "-")
+                    venue = parts_dict.get("Venue", "").replace("|", "-")
+                    date = parts_dict.get("Date", "").replace("|", "-")
+                    rows.append(f"| {title} | {ptype} | {role_lvl} | {venue} | {date} |")
+                else:
+                    rows.append(f"| {clean_l.replace('|', '-')} | - | - | - | - |")
+            return "\n".join(rows)
+
         parts: list[str] = []
         if bio_lines:
             parts.append("### Overview & Academic Background\n" + "\n".join(bio_lines))
@@ -307,9 +347,9 @@ def extract_page_repr(
         if award_lines:
             parts.append("### Awards, Honors & Achievements\n" + "\n".join(award_lines))
         if pub_lines:
-            parts.append("### Research and Publications\n" + "\n".join(pub_lines))
+            parts.append("### Research and Publications\n" + _format_pub_table(pub_lines))
         if dev_lines:
-            parts.append("### Professional Development (Workshops, Training Programs, FDPs & STTPs)\n" + "\n".join(dev_lines))
+            parts.append("### Professional Development (Workshops, Training Programs, FDPs & STTPs)\n" + _format_dev_table(dev_lines))
 
         base = "\n\n".join(parts)
         remaining = max_chars - len(base)
@@ -514,6 +554,9 @@ async def stream_answer(
                     "   - In Overview, list each detail on its own separate line or bullet (e.g., - **Name:** ..., - **Designation:** ..., - **Department:** ..., - **Contact Email:** ..., - **Qualifications:** ...). Never combine multiple fields into a single line.\n"
                     "   - When presenting work experience for a faculty member, list each previous employment entry one by one in proper format: `- [Designation] at [Organization] ([Location]) (From: [From Date] to [To Date])`.\n"
                     "   - When presenting awards, honors, or achievements, list each one as a distinct bullet point.\n"
+                    "   - When presenting Research and Publications, format them as a clean Markdown table with columns: `| Title | Type | Level | Academic Year | Date |`.\n"
+                    "   - When presenting Professional Development (Workshops, Training Programs, FDPs & STTPs), format them as a clean Markdown table with columns: `| Program / Workshop Title | Type | Role / Level | Venue | Date |`.\n"
+                    "   - Clean up any encoding artifacts (e.g., replace `Ã¢â¬â` with proper dashes `-`).\n"
                     "   - For an individual faculty or person query, focus strictly on that individual; do NOT append a faculty roster, table of other department faculty, or other staff members at the end.\n"
                     "   - Do NOT output boilerplate placeholder phrases like 'Not explicitly specified in the provided data', 'Employee ID: Not explicitly specified', or 'Not specified'; if data for a field or section is not in the text, simply omit that line or heading entirely.\n"
                     "4. For committees or teams, clearly list the Coordinator/Head followed by the members with their respective designations or departments.\n"
