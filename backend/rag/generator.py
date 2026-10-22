@@ -1469,6 +1469,79 @@ def extract_textbooks_and_references(query: str, retrieved_chunks) -> str | None
 
     return None
 
+def extract_course_assignments_or_activities(query: str, retrieved_chunks=None) -> str | None:
+    sections = get_sections_dict()
+    code = resolve_course_code_from_query(query, retrieved_chunks)
+    if not code or code not in sections:
+        return None
+
+    sec = sections[code]
+    cname = extract_course_name_from_header(sec['header'])
+    pages_text = '\n'.join(p.get('text', '') for p in sec.get('all_pages', []))
+
+    # Clean header footers
+    pages_text = re.sub(r'SIES Graduate School of Technology.*?\n', '', pages_text, flags=re.I)
+    pages_text = re.sub(r'Department of Computer Engineering.*?\n', '', pages_text, flags=re.I)
+    pages_text = re.sub(r'Bachelor of (?:Engineering|Technology).*?\n', '', pages_text, flags=re.I)
+    pages_text = re.sub(r'\n\s*\d+\s*\n', '\n', pages_text)
+
+    wants_assignments = bool(re.search(r'\b(assignments?|list of assignments?)\b', query, re.I))
+    wants_activities = bool(re.search(r'\b(activities|activity|details of activities)\b', query, re.I))
+
+    # 1. Extract List of Assignments
+    assignments_list = []
+    m_asg = re.search(r'(?is)List of Assignments:\s*(.*?)(?=\n\s*(?:Term Work|Assessment|Online Resources|Details of Activities)|\Z)', pages_text)
+    if m_asg:
+        raw_asg = m_asg.group(1).strip()
+        for line in raw_asg.split('\n'):
+            line = line.strip()
+            if re.match(r'^\d+\.\s+', line):
+                assignments_list.append(line)
+
+    # 2. Extract Details of Activities
+    activities_list = []
+    m_act = re.search(r'(?is)Details of Activities\s*(.*?)(?=\n\s*(?:List of Assignments|Term Work|Assessment|Online Resources)|\Z)', pages_text)
+    if m_act:
+        raw_act = m_act.group(1).strip()
+        items = re.split(r'\n(?=\d+\.\s+)', raw_act)
+        for it in items:
+            lines = [l.strip() for l in it.split('\n') if l.strip()]
+            if not lines:
+                continue
+            title = lines[0]
+            desc = ' '.join(lines[1:])
+            desc = re.sub(r'\s+', ' ', desc).strip()
+            activities_list.append((title, desc))
+
+    if wants_assignments and assignments_list:
+        out = [f'### {code}: {cname} - List of Assignments\n']
+        for asg in assignments_list:
+            out.append(f'{asg}')
+        # Also include term work note if present
+        m_tw = re.search(r'(?is)Term Work:\s*(.*?)(?=\n\s*(?:Assessment|Online Resources)|\Z)', pages_text)
+        if m_tw:
+            tw_note = re.sub(r'\s+', ' ', m_tw.group(1).strip())
+            out.append(f'\n**Term Work:**\n{tw_note}')
+        return '\n'.join(out)
+
+    if wants_activities and activities_list:
+        out = [f'### {code}: {cname} - Details of Activities\n']
+        out.append('| Sr. No. | Activity Title | Details / Tasks |')
+        out.append('|:---:|---|---|')
+        for title, desc in activities_list:
+            m_num = re.match(r'^(\d+)\.\s*(.*)', title)
+            if m_num:
+                num = m_num.group(1)
+                t_clean = m_num.group(2)
+            else:
+                num = '-'
+                t_clean = title
+            out.append(f'| {num} | **{t_clean}** | {desc} |')
+        return '\n'.join(out)
+
+    return None
+
+
 def extract_lab_experiments(query: str, retrieved_chunks, course_code: str | None = None, course_name: str | None = None) -> str | None:
 
     if not re.search(r"\b(experiments?|practicals?|tasks?|lab experiments?|exps?|exp\.?|pracs?|prac\.?)\b", query, re.IGNORECASE):
@@ -2327,7 +2400,7 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
 
     outs = []
 
-    m_out = re.search(r"(?is)(?:Course|Lab)\s+Outcomes?\s*:\s*(?:Upon completion of this course.*?:)?\s*(.*?)(?=\n\s*(?:Course\s+Code|Teaching\s+Scheme|Module\s+No|Suggested\s+List)|\Z)", p1_text)
+    m_out = re.search(r"(?is)(?:Course|Lab)\s+Outcomes?\s*:\s*(?:Upon completion of this course.*?:)?\s*(.*?)(?=\n\s*(?:Course\s+Code|Teaching\s+Scheme|Module\s+No|Suggested\s+List|Sr\.?\s*No\.?|Details of Activities)|\Z)", p1_text)
 
     if m_out:
 
@@ -2416,8 +2489,15 @@ def build_course_full_markdown(target_code: str, section: dict, sections: dict) 
             res_lines.append(f"### Suggested List of Experiments\n\n{clean_exps}\n")
 
         else:
-
-            outlines = section.get("module_outlines", [])
+            asg_act = extract_course_assignments_or_activities("activities", section["all_pages"])
+            asg_list = extract_course_assignments_or_activities("assignments", section["all_pages"])
+            if asg_act or asg_list:
+                if asg_act:
+                    res_lines.append(asg_act + "\n")
+                if asg_list:
+                    res_lines.append(asg_list + "\n")
+            else:
+                outlines = section.get("module_outlines", [])
 
             if outlines:
 
@@ -3552,6 +3632,10 @@ def generate_answer(question: str, retrieved_chunks, original_question: str = No
     if fast_books:
 
         return early_return(fast_books)
+
+    fast_asg = extract_course_assignments_or_activities(check_query, retrieved_chunks)
+    if fast_asg:
+        return early_return(fast_asg)
 
     fast_academic_dispatch = extract_academic_query_dispatch(check_query, retrieved_chunks)
 
